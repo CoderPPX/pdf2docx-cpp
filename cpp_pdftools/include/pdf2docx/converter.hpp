@@ -1,0 +1,35 @@
+#pragma once
+
+#include <string>
+
+#include "pdf2docx/ir.hpp"
+#include "pdf2docx/status.hpp"
+#include "pdf2docx/types.hpp"
+
+namespace pdf2docx {
+
+class Converter {
+ public:
+  explicit Converter(BackendKind backend = BackendKind::kPoDoFo);
+
+  Status ConvertFile(const std::string& input_pdf,
+                     const std::string& output_docx,
+                     const ConvertOptions& options,
+                     ConvertStats* stats) const;
+
+  Status ConvertFile(const std::string& input_pdf,
+                     const std::string& output_docx,
+                     const ConvertOptions& options,
+                     ConvertStats* stats,
+                     ir::Document* out_document) const;
+
+  Status ExtractIrFromFile(const std::string& input_pdf,
+                           const ConvertOptions& options,
+                           ir::Document* document,
+                           ImageExtractionStats* image_stats = nullptr) const;
+
+ private:
+  BackendKind backend_;
+};
+
+}  // namespace pdf2docx

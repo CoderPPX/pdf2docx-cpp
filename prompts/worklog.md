@@ -880,3 +880,51 @@
 3. 结果：
    - 新版 `build/final_image_text.docx` 标题区域排版明显改善；
    - 且图片抽取问题已同步修复（见上一节）。
+
+---
+
+## `cpp_pdftools` 大框架规划记录（roadmap 输出）
+
+- 记录时间：`2026-04-03 08:50:00 EDT (-0400)`
+
+已新增全新规划文档（文件名前缀 `pdftools-`，与 `cpp_pdf2docx` 旧文档区分）：
+1. `prompts/pdftools-roadmap-v1.md`
+2. `prompts/pdftools-migration-plan-v1.md`
+3. `prompts/pdftools-tasks-checklist-v1.md`
+
+内容覆盖：
+- `cpp_pdftools` 分层架构、接口规范、CLI/GUI 共用编排模型；
+- `cpp_pdf2docx` 并入新框架的迁移策略与目录映射；
+- 可执行的阶段清单与验收标准（M0~M6 + FINAL）。
+
+## `cpp_pdftools` 模块级详细设计补充（module spec 输出）
+
+- 记录时间：`2026-04-03 09:05:00 EDT (-0400)`
+
+已新增：
+- `prompts/pdftools-module-spec-v1.md`
+
+本次文档聚焦“每个模块到底要做什么”，包含：
+1. 模块职责拆解（M0~M6 + 横切能力）
+2. 每个模块的核心类清单
+3. 每个模块的接口定义与功能说明
+4. 每个接口的实现思路（自然语言）
+5. 模块级完成标准（DoD）与推荐落地顺序
+
+## `cpp_pdftools` M0~M6 实施完成记录
+
+- 记录时间：`2026-04-03 10:05:00 EDT (-0400)`
+
+已新增：
+- `prompts/pdftools-module-execution-v1.md`
+
+本次执行结果：
+1. `cpp_pdftools` 工程完成搭建并可独立构建。
+2. `cpp_pdf2docx` 核心已迁入并通过新框架适配接口调用。
+3. M2/M3/M4 能力完成（文档编辑、文本/附件提取、图片转PDF）。
+4. M5 单入口 CLI `pdftools` 完成并接通全部主能力。
+5. M6 异步任务 API（`TaskRunner`）完成并支持取消与查询。
+6. 验证通过：
+   - `cmake --preset linux-debug`
+   - `cmake --build --preset linux-debug -j4`
+   - `ctest --preset linux-debug`（`7/7 passed`）
