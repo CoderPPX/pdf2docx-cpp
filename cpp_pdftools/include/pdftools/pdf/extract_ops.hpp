@@ -20,6 +20,7 @@ struct ExtractTextRequest {
   uint32_t page_end = 0;    // 0 means to the last page
   bool include_positions = false;
   TextOutputFormat output_format = TextOutputFormat::kPlainText;
+  bool best_effort = true;  // true: allow fallback extractor, false: strict PoDoFo only
   bool overwrite = false;
 };
 
@@ -36,6 +37,8 @@ struct ExtractTextResult {
   uint32_t entry_count = 0;
   std::string text;
   std::vector<TextEntry> entries;
+  bool used_fallback = false;
+  std::string extractor = "podofo";
 };
 
 Status ExtractText(const ExtractTextRequest& request, ExtractTextResult* result);
@@ -43,6 +46,7 @@ Status ExtractText(const ExtractTextRequest& request, ExtractTextResult* result)
 struct ExtractAttachmentsRequest {
   std::string input_pdf;
   std::string output_dir;
+  bool best_effort = true;  // true: parse failure returns empty result; false: return error
   bool overwrite = false;
 };
 
@@ -54,9 +58,10 @@ struct AttachmentInfo {
 
 struct ExtractAttachmentsResult {
   std::vector<AttachmentInfo> attachments;
+  bool parse_failed = false;
+  std::string parser = "podofo";
 };
 
 Status ExtractAttachments(const ExtractAttachmentsRequest& request, ExtractAttachmentsResult* result);
 
 }  // namespace pdftools::pdf
-

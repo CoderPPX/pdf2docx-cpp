@@ -18,8 +18,8 @@ namespace {
 void PrintHelp(std::ostream& out) {
   out << "Usage:\n"
       << "  pdftools merge <output.pdf> <input1.pdf> <input2.pdf> [inputN.pdf...]\n"
-      << "  pdftools text extract --input <in.pdf> --output <out.txt|out.json> [--json]\n"
-      << "  pdftools attachments extract --input <in.pdf> --out-dir <dir>\n"
+      << "  pdftools text extract --input <in.pdf> --output <out.txt|out.json> [--json] [--strict]\n"
+      << "  pdftools attachments extract --input <in.pdf> --out-dir <dir> [--strict]\n"
       << "  pdftools image2pdf --output <out.pdf> --images <img1> <img2> [imgN]\n"
       << "  pdftools page delete --input <in.pdf> --output <out.pdf> --page <n>\n"
       << "  pdftools page insert --input <in.pdf> --output <out.pdf> --at <n> --source <src.pdf> --source-page <m>\n"
@@ -113,13 +113,17 @@ int RunCli(const std::vector<std::string>& args, std::ostream& out, std::ostream
     request.output_path = *output;
     request.include_positions = HasFlag(args, "--include-positions");
     request.output_format = HasFlag(args, "--json") ? pdf::TextOutputFormat::kJson : pdf::TextOutputFormat::kPlainText;
+    request.best_effort = !HasFlag(args, "--strict");
 
     pdf::ExtractTextResult result;
     Status status = pdf::ExtractText(request, &result);
     if (!status.ok()) {
       return PrintStatus(err, status);
     }
-    out << "text extracted pages=" << result.page_count << " entries=" << result.entry_count << "\n";
+    out << "text extracted pages=" << result.page_count
+        << " entries=" << result.entry_count
+        << " extractor=" << result.extractor
+        << " fallback=" << (result.used_fallback ? "yes" : "no") << "\n";
     return 0;
   }
 
@@ -134,13 +138,16 @@ int RunCli(const std::vector<std::string>& args, std::ostream& out, std::ostream
     pdf::ExtractAttachmentsRequest request;
     request.input_pdf = *input;
     request.output_dir = *out_dir;
+    request.best_effort = !HasFlag(args, "--strict");
 
     pdf::ExtractAttachmentsResult result;
     Status status = pdf::ExtractAttachments(request, &result);
     if (!status.ok()) {
       return PrintStatus(err, status);
     }
-    out << "attachments extracted count=" << result.attachments.size() << "\n";
+    out << "attachments extracted count=" << result.attachments.size()
+        << " parser=" << result.parser
+        << " parse_failed=" << (result.parse_failed ? "yes" : "no") << "\n";
     return 0;
   }
 
@@ -174,7 +181,7 @@ int RunCli(const std::vector<std::string>& args, std::ostream& out, std::ostream
     if (!status.ok()) {
       return PrintStatus(err, status);
     }
-    out << "image2pdf pages=" << result.page_count << "\n";
+    out << "image2pdf pages=" << result.page_count << " skipped_images=" << result.skipped_image_count << "\n";
     return 0;
   }
 
@@ -312,4 +319,3 @@ int RunCli(const std::vector<std::string>& args, std::ostream& out, std::ostream
 }
 
 }  // namespace pdftools
-

@@ -26,9 +26,9 @@ struct ImagesToPdfRequest {
 
 struct ImagesToPdfResult {
   uint32_t page_count = 0;
+  uint32_t skipped_image_count = 0;
 };
 
 Status ImagesToPdf(const ImagesToPdfRequest& request, ImagesToPdfResult* result);
 
 }  // namespace pdftools::pdf
-

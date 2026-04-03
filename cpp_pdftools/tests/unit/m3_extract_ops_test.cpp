@@ -37,7 +37,33 @@ int main() {
   if (text_result.page_count == 0 || text_result.entry_count == 0) {
     return EXIT_FAILURE;
   }
+  if (text_result.used_fallback) {
+    return EXIT_FAILURE;
+  }
+  if (text_result.extractor != "podofo") {
+    return EXIT_FAILURE;
+  }
   if (!fs::exists(text_output) || fs::file_size(text_output) == 0) {
+    return EXIT_FAILURE;
+  }
+
+  // Strict mode should reject a non-PDF input without fallback.
+  const fs::path invalid_input = out_dir / "not_pdf.bin";
+  {
+    std::ofstream invalid_out(invalid_input, std::ios::binary);
+    invalid_out << "definitely-not-a-pdf";
+  }
+  pdftools::pdf::ExtractTextRequest strict_request;
+  strict_request.input_pdf = invalid_input.string();
+  strict_request.output_path = (out_dir / "strict_output.txt").string();
+  strict_request.best_effort = false;
+  strict_request.overwrite = true;
+  pdftools::pdf::ExtractTextResult strict_result;
+  status = pdftools::pdf::ExtractText(strict_request, &strict_result);
+  if (status.ok()) {
+    return EXIT_FAILURE;
+  }
+  if (status.code() != pdftools::ErrorCode::kPdfParseFailed) {
     return EXIT_FAILURE;
   }
 
@@ -70,6 +96,12 @@ int main() {
   if (!status.ok()) {
     return EXIT_FAILURE;
   }
+  if (attachment_result.parse_failed) {
+    return EXIT_FAILURE;
+  }
+  if (attachment_result.parser != "podofo") {
+    return EXIT_FAILURE;
+  }
   if (attachment_result.attachments.empty()) {
     return EXIT_FAILURE;
   }
@@ -82,6 +114,36 @@ int main() {
   std::ifstream in(extracted_file, std::ios::binary);
   std::string loaded((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
   if (loaded != "hello-from-attachment") {
+    return EXIT_FAILURE;
+  }
+
+  // Attachment extraction best-effort mode: invalid PDF should not fail the whole task.
+  pdftools::pdf::ExtractAttachmentsRequest attachment_best_effort_request;
+  attachment_best_effort_request.input_pdf = invalid_input.string();
+  attachment_best_effort_request.output_dir = (out_dir / "attachments_invalid_best_effort").string();
+  attachment_best_effort_request.best_effort = true;
+  attachment_best_effort_request.overwrite = true;
+  pdftools::pdf::ExtractAttachmentsResult attachment_best_effort_result;
+  status = pdftools::pdf::ExtractAttachments(attachment_best_effort_request, &attachment_best_effort_result);
+  if (!status.ok()) {
+    return EXIT_FAILURE;
+  }
+  if (!attachment_best_effort_result.parse_failed) {
+    return EXIT_FAILURE;
+  }
+
+  // Strict mode should fail on invalid PDF.
+  pdftools::pdf::ExtractAttachmentsRequest attachment_strict_request;
+  attachment_strict_request.input_pdf = invalid_input.string();
+  attachment_strict_request.output_dir = (out_dir / "attachments_invalid_strict").string();
+  attachment_strict_request.best_effort = false;
+  attachment_strict_request.overwrite = true;
+  pdftools::pdf::ExtractAttachmentsResult attachment_strict_result;
+  status = pdftools::pdf::ExtractAttachments(attachment_strict_request, &attachment_strict_result);
+  if (status.ok()) {
+    return EXIT_FAILURE;
+  }
+  if (status.code() != pdftools::ErrorCode::kPdfParseFailed) {
     return EXIT_FAILURE;
   }
 

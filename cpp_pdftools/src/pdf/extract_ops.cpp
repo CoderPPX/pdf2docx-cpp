@@ -1,6 +1,8 @@
 #include "pdftools/pdf/extract_ops.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -154,6 +156,135 @@ std::filesystem::path ResolveUniqueOutputPath(const std::filesystem::path& base_
   return base_path;
 }
 
+Status WriteOutputFile(const std::string& output_path, const std::string& content) {
+  if (output_path.empty()) {
+    return Status::Ok();
+  }
+
+  std::ofstream out(output_path, std::ios::binary);
+  if (!out.is_open()) {
+    return Status::Error(ErrorCode::kIoError, "failed to open output file", output_path);
+  }
+  out.write(content.data(), static_cast<std::streamsize>(content.size()));
+  out.close();
+  if (!out.good()) {
+    return Status::Error(ErrorCode::kIoError, "failed to write output file", output_path);
+  }
+  return Status::Ok();
+}
+
+std::string QuoteShellArgPosix(const std::string& value) {
+  std::string quoted = "'";
+  for (char ch : value) {
+    if (ch == '\'') {
+      quoted += "'\"'\"'";
+    } else {
+      quoted.push_back(ch);
+    }
+  }
+  quoted.push_back('\'');
+  return quoted;
+}
+
+Status TryExtractTextWithPdfToTextFallback(const ExtractTextRequest& request, ExtractTextResult* result) {
+  if (result == nullptr) {
+    return Status::Error(ErrorCode::kInvalidArgument, "result pointer is null");
+  }
+
+  std::string command = "pdftotext " + QuoteShellArgPosix(request.input_pdf) + " - 2>/dev/null";
+  FILE* pipe = popen(command.c_str(), "r");
+  if (pipe == nullptr) {
+    return Status::Error(ErrorCode::kUnsupportedFeature, "pdftotext fallback is not available");
+  }
+
+  std::string text;
+  std::array<char, 4096> buffer{};
+  while (true) {
+    size_t read_size = std::fread(buffer.data(), 1, buffer.size(), pipe);
+    if (read_size > 0) {
+      text.append(buffer.data(), read_size);
+    }
+    if (read_size < buffer.size()) {
+      if (std::feof(pipe) != 0) {
+        break;
+      }
+      if (std::ferror(pipe) != 0) {
+        (void)pclose(pipe);
+        return Status::Error(ErrorCode::kIoError, "failed to read pdftotext output");
+      }
+    }
+  }
+
+  int exit_status = pclose(pipe);
+  if (exit_status != 0) {
+    return Status::Error(ErrorCode::kPdfParseFailed, "pdftotext fallback failed");
+  }
+
+  result->entries.clear();
+  std::istringstream iss(text);
+  std::string line;
+  while (std::getline(iss, line)) {
+    if (line.empty()) {
+      continue;
+    }
+    TextEntry entry;
+    entry.page = 1;
+    entry.x = 0.0;
+    entry.y = 0.0;
+    entry.length = static_cast<double>(line.size());
+    entry.text = line;
+    result->entries.push_back(std::move(entry));
+  }
+
+  result->entry_count = static_cast<uint32_t>(result->entries.size());
+  result->page_count = text.empty() ? 0 : 1;
+  result->used_fallback = true;
+  result->extractor = "pdftotext";
+  if (request.output_format == TextOutputFormat::kJson) {
+    result->text = BuildJsonText(result->entries);
+  } else {
+    result->text = std::move(text);
+  }
+
+  return WriteOutputFile(request.output_path, result->text);
+}
+
+Status TryLoadDocument(PoDoFo::PdfMemDocument* document, const std::string& input_pdf, std::string* error_message) {
+  if (document == nullptr) {
+    return Status::Error(ErrorCode::kInvalidArgument, "document pointer is null");
+  }
+
+  struct LoadAttempt {
+    PoDoFo::PdfLoadOptions options;
+    const char* tag;
+  };
+
+  const LoadAttempt attempts[] = {
+      {PoDoFo::PdfLoadOptions::None, "default"},
+      {PoDoFo::PdfLoadOptions::LoadStreamsEagerly, "load_streams_eagerly"},
+      {PoDoFo::PdfLoadOptions::SkipXRefRecovery, "skip_xref_recovery"},
+      {PoDoFo::PdfLoadOptions::LoadStreamsEagerly | PoDoFo::PdfLoadOptions::SkipXRefRecovery,
+       "eager_and_skip_xref_recovery"},
+  };
+
+  std::string last_error;
+  for (const auto& attempt : attempts) {
+    try {
+      document->Load(input_pdf, attempt.options);
+      return Status::Ok();
+    } catch (const std::exception& e) {
+      last_error = std::string(attempt.tag) + ": " + e.what();
+    } catch (...) {
+      last_error = std::string(attempt.tag) + ": unknown load error";
+    }
+  }
+
+  if (error_message != nullptr) {
+    *error_message = std::move(last_error);
+  }
+  return Status::Error(ErrorCode::kPdfParseFailed, "failed to load PDF with all PoDoFo strategies");
+}
+
 }  // namespace
 
 Status ExtractText(const ExtractTextRequest& request, ExtractTextResult* result) {
@@ -170,9 +301,14 @@ Status ExtractText(const ExtractTextRequest& request, ExtractTextResult* result)
     }
   }
 
+  std::string primary_error_message = "failed to extract text from PDF";
+
   try {
     PoDoFo::PdfMemDocument document;
-    document.Load(request.input_pdf);
+    Status load_status = TryLoadDocument(&document, request.input_pdf, &primary_error_message);
+    if (!load_status.ok()) {
+      throw std::runtime_error(primary_error_message);
+    }
     const uint32_t total_pages = document.GetPages().GetCount();
 
     uint32_t begin_page = 0;
@@ -204,30 +340,32 @@ Status ExtractText(const ExtractTextRequest& request, ExtractTextResult* result)
     result->entries = entries;
     result->entry_count = static_cast<uint32_t>(entries.size());
     result->page_count = end_page - begin_page + 1;
+    result->used_fallback = false;
+    result->extractor = "podofo";
     if (request.output_format == TextOutputFormat::kJson) {
       result->text = BuildJsonText(entries);
     } else {
       result->text = BuildPlainText(entries);
     }
 
-    if (!request.output_path.empty()) {
-      std::ofstream out(request.output_path, std::ios::binary);
-      if (!out.is_open()) {
-        return Status::Error(ErrorCode::kIoError, "failed to open output file", request.output_path);
-      }
-      out.write(result->text.data(), static_cast<std::streamsize>(result->text.size()));
-      out.close();
-      if (!out.good()) {
-        return Status::Error(ErrorCode::kIoError, "failed to write output file", request.output_path);
-      }
-    }
-
-    return Status::Ok();
+    return WriteOutputFile(request.output_path, result->text);
   } catch (const std::exception& e) {
-    return Status::Error(ErrorCode::kPdfParseFailed, e.what());
+    primary_error_message = e.what();
   } catch (...) {
-    return Status::Error(ErrorCode::kPdfParseFailed, "failed to extract text from PDF");
+    primary_error_message = "failed to extract text from PDF";
   }
+
+  if (!request.best_effort) {
+    return Status::Error(ErrorCode::kPdfParseFailed, primary_error_message);
+  }
+
+  // Fallback for malformed but still salvageable PDFs.
+  Status fallback_status = TryExtractTextWithPdfToTextFallback(request, result);
+  if (fallback_status.ok()) {
+    return Status::Ok();
+  }
+
+  return Status::Error(ErrorCode::kPdfParseFailed, primary_error_message);
 }
 
 Status ExtractAttachments(const ExtractAttachmentsRequest& request, ExtractAttachmentsResult* result) {
@@ -250,7 +388,20 @@ Status ExtractAttachments(const ExtractAttachmentsRequest& request, ExtractAttac
 
   try {
     PoDoFo::PdfMemDocument document;
-    document.Load(request.input_pdf);
+    std::string load_error_message;
+    Status load_status = TryLoadDocument(&document, request.input_pdf, &load_error_message);
+    if (!load_status.ok()) {
+      if (request.best_effort) {
+        result->attachments.clear();
+        result->parse_failed = true;
+        result->parser = "none";
+        return Status::Ok();
+      }
+      return Status::Error(ErrorCode::kPdfParseFailed, load_error_message);
+    }
+
+    result->parse_failed = false;
+    result->parser = "podofo";
 
     PoDoFo::PdfNameTrees* names = document.GetNames();
     if (names == nullptr) {

@@ -928,3 +928,115 @@
    - `cmake --preset linux-debug`
    - `cmake --build --preset linux-debug -j4`
    - `ctest --preset linux-debug`（`7/7 passed`）
+
+## 联网大规模测试记录（public datasets）
+
+- 记录时间：`2026-04-03 10:40:00 EDT (-0400)`
+
+已新增：
+- `prompts/pdftools-large-scale-test-v1.md`
+
+本轮执行摘要：
+1. 从 `mozilla/pdf.js`、`python-pillow/Pillow` 联网下载公开测试集（PDF + 图片）。
+2. 对 `pdftools` 执行批量测试：
+   - `text extract`
+   - `convert pdf2docx`
+   - `merge/page delete/page insert/page replace`
+   - `image2pdf`
+   - `attachments extract`
+3. 关键结果：
+   - 文本提取：`52/56`
+   - pdf2docx：`20/20`
+   - 页面编辑：全部 `15/15`
+   - image2pdf：`4/5`（失败批次为损坏图片）
+   - 附件提取调用：`52/52`，提取到附件文件 `1`
+
+## 联网大规模测试（V2 继续扩容）
+
+- 记录时间：`2026-04-03 10:50:00 EDT (-0400)`
+
+已新增：
+- `prompts/pdftools-large-scale-test-v2.md`
+
+V2 结果摘要：
+1. 样本规模：PDF `58`，图片 `25`。
+2. 文本提取：`53/58`（失败 5 个异常 PDF）。
+3. pdf2docx：`30/30`。
+4. 页面编辑：
+   - merge `20/20`
+   - delete `20/20`
+   - insert `20/20`
+   - replace `20/20`
+5. image2pdf：
+   - batch `4/5`
+   - single `24/25`（失败文件 `broken_data_stream.png`）
+6. 附件提取：
+   - 调用成功 `53/53`
+   - 提取到附件文件 `1`
+
+## 失败根因修复（文本提取 + image2pdf）
+
+- 记录时间：`2026-04-03 11:05:00 EDT (-0400)`
+
+已新增：
+- `prompts/pdftools-failure-analysis-fix-v1.md`
+
+本次修复内容：
+1. `ExtractText` 增加 PoDoFo 多加载策略与 `pdftotext` 回退路径。
+2. `ImagesToPdf` 改为“坏图跳过、整批继续”，仅在全部图片失效时失败。
+3. 增加混合坏图回归测试并通过。
+
+修复后关键结果：
+1. 大规模文本提取从 `53/58` 提升到 `57/58`（仅剩 1 个非 PDF 输入失败）。
+2. 图片批量转 PDF 从 `4/5` 提升到 `5/5`。
+3. `ctest --preset linux-debug`：`7/7 passed`。
+
+## 容错模式接口化（strict/best-effort）继续迭代
+
+- 记录时间：`2026-04-03 11:15:00 EDT (-0400)`
+
+本次继续完成：
+1. `text extract` 增加 `best_effort` 请求字段与 CLI `--strict` 参数。
+2. `ExtractTextResult` 增加 `used_fallback/extractor` 字段，便于调用方判断是否降级。
+3. `ImagesToPdfResult` 增加 `skipped_image_count` 字段。
+4. 补充测试：
+   - `m3_extract_ops_test` strict 场景
+   - `m4_create_ops_test` 跳过坏图统计
+   - `m5_cli_test` strict 参数路径
+5. 复测结果：
+   - `ctest --preset linux-debug`：`7/7 passed`
+   - 大规模快速复测（V4）：
+     - 文本提取 `57/58`
+     - 图片批量 `5/5`
+
+## 附件提取容错模式补全 + 全链路复测
+
+- 记录时间：`2026-04-03 11:25:00 EDT (-0400)`
+
+已新增：
+- `prompts/pdftools-large-scale-test-v3.md`
+
+本次继续完成：
+1. `ExtractAttachmentsRequest` 增加 `best_effort`（默认 true）与 CLI `attachments extract --strict`。
+2. `ExtractAttachmentsResult` 增加 `parse_failed/parser` 字段。
+3. 单测补强并保持全绿：`ctest --preset linux-debug -> 7/7 passed`。
+
+全链路复测（V4）：
+1. 文本提取：`57/58`
+2. pdf2docx：`30/30`
+3. 页面编辑（merge/delete/insert/replace）：全部 `20/20`
+4. image2pdf 批量：`5/5`
+5. 附件提取：`57/57`（`parse_failed=1`，实际提取文件 `2`）
+
+## CLI 中文使用手册输出
+
+- 记录时间：`2026-04-03 11:35:00 EDT (-0400)`
+
+已新增：
+- `prompts/pdftools-cli-guide-v1.md`
+
+内容包括：
+1. 全部子命令语法与参数定义（逐项解释）
+2. 退出码说明与常见错误排查
+3. 每个命令的可复现示例（含示例输出）
+4. strict/best-effort 模式说明与注意事项
