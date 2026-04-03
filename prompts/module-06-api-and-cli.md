@@ -45,6 +45,9 @@ struct ConvertStats {
   uint32_t font_probe_count = 0;
   uint32_t backend_warning_count = 0;
   double elapsed_ms = 0.0;
+  double extract_elapsed_ms = 0.0;
+  double pipeline_elapsed_ms = 0.0;
+  double write_elapsed_ms = 0.0;
   std::string backend;
   std::string xml_backend;
 };
@@ -61,6 +64,12 @@ Status ConvertFile(const std::string& input_pdf,
                    const std::string& output_docx,
                    const ConvertOptions& options,
                    ConvertStats* stats) const;
+
+Status ConvertFile(const std::string& input_pdf,
+                   const std::string& output_docx,
+                   const ConvertOptions& options,
+                   ConvertStats* stats,
+                   ir::Document* out_document) const;
 ```
 
 ---
@@ -73,6 +82,7 @@ Status ConvertFile(const std::string& input_pdf,
 3. `pipeline.Execute(&ir_document, &pipeline_stats)`：页内 spans 排序。
 4. `P0Writer.WriteFromIr(...)`：写出 DOCX。
 5. 汇总 `ConvertStats` 并返回。
+6. 统计分段耗时（extract/pipeline/write）。
 
 ---
 
@@ -141,3 +151,30 @@ ir2html <input.pdf> <output.html> [--scale 1.25] [--hide-boxes] [--only-page N]
 - `test-image-text.pdf` 实跑：
   - `pdf2docx ... --dump-ir` 成功；
   - 输出统计：`pages=7 images=2 skipped_images=5 warnings=5`。
+
+---
+
+## 9) 增量进展（2026-04-03, M10）
+
+已落地 `--dump-ir` 单次提取复用：
+1. `Converter` 增加重载：
+   - `ConvertFile(..., ConvertStats* stats, ir::Document* out_document)`。
+2. `pdf2docx` CLI 在 `--dump-ir` 开启时复用转换中的 IR，不再二次调用 `ExtractIrFromFile`。
+3. `converter_test` 新增“返回 IR 与 stats 一致性”断言，验证页数与图片计数对齐。
+
+结果：功能不回归，`ctest --preset linux-debug` 仍为 `16/16`。
+
+---
+
+## 10) 增量进展（2026-04-03, M13）
+
+已落地阶段耗时可观测性：
+1. `ConvertStats` 增加：
+   - `extract_elapsed_ms`
+   - `pipeline_elapsed_ms`
+   - `write_elapsed_ms`
+2. `converter` 在三段关键流程前后计时并填充字段。
+3. `pdf2docx` CLI 输出新增 `extract_ms/pipeline_ms/write_ms`。
+4. `converter_test` 新增阶段耗时有效性断言（非负且不超过总耗时）。
+
+结果：`ctest --preset linux-debug` 通过（`16/16`）。

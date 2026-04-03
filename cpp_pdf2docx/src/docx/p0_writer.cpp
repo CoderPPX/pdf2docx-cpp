@@ -1,6 +1,7 @@
 #include "docx/p0_writer.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -35,11 +36,40 @@ struct DocxImageRef {
   int64_t height_emu = 1;
   int64_t x_emu = 0;
   int64_t y_emu = 0;
+  int32_t rotation_60000 = 0;
+};
+
+struct ImageBounds {
+  double left = 0.0;
+  double bottom = 0.0;
+  double width = 1.0;
+  double height = 1.0;
 };
 
 int64_t PtToEmu(double pt) {
   constexpr double kEmuPerPt = 12700.0;
   return std::max<int64_t>(1, static_cast<int64_t>(std::llround(pt * kEmuPerPt)));
+}
+
+double SpanLeftX(const ir::TextSpan& span) {
+  if (span.has_bbox) {
+    return span.bbox.x;
+  }
+  return span.x;
+}
+
+double SpanRightX(const ir::TextSpan& span) {
+  if (span.has_bbox) {
+    return span.bbox.x + span.bbox.width;
+  }
+  return span.x + std::max(8.0, span.length);
+}
+
+double SpanLineY(const ir::TextSpan& span) {
+  if (span.has_bbox && span.bbox.height > 0.0) {
+    return span.bbox.y + span.bbox.height;
+  }
+  return span.y;
 }
 
 std::string NormalizeExtension(const std::string& extension) {
@@ -72,6 +102,57 @@ std::string GuessMimeTypeFromExtension(const std::string& extension) {
   return "application/octet-stream";
 }
 
+ImageBounds ResolveImageBounds(const ir::ImageBlock& image) {
+  if (!image.has_quad) {
+    return ImageBounds{
+        .left = image.x,
+        .bottom = image.y,
+        .width = std::max(1.0, image.width),
+        .height = std::max(1.0, image.height),
+    };
+  }
+
+  const std::array<ir::Point, 4> points = {
+      image.quad.p0,
+      image.quad.p1,
+      image.quad.p2,
+      image.quad.p3,
+  };
+  double min_x = points[0].x;
+  double max_x = points[0].x;
+  double min_y = points[0].y;
+  double max_y = points[0].y;
+  for (const auto& point : points) {
+    min_x = std::min(min_x, point.x);
+    max_x = std::max(max_x, point.x);
+    min_y = std::min(min_y, point.y);
+    max_y = std::max(max_y, point.y);
+  }
+  return ImageBounds{
+      .left = min_x,
+      .bottom = min_y,
+      .width = std::max(1.0, max_x - min_x),
+      .height = std::max(1.0, max_y - min_y),
+  };
+}
+
+int32_t ResolveImageRotation60000(const ir::ImageBlock& image) {
+  if (!image.has_quad) {
+    return 0;
+  }
+  const double dx = image.quad.p1.x - image.quad.p0.x;
+  const double dy = image.quad.p1.y - image.quad.p0.y;
+  if (std::fabs(dx) < 1e-6 && std::fabs(dy) < 1e-6) {
+    return 0;
+  }
+  constexpr double kRadToDeg = 57.29577951308232;
+  const double degrees = std::atan2(dy, dx) * kRadToDeg;
+  if (std::fabs(degrees) < 0.1) {
+    return 0;
+  }
+  return static_cast<int32_t>(std::llround(degrees * 60000.0));
+}
+
 std::vector<DocxImageRef> CollectDocxImages(const ir::Document& ir_document) {
   std::vector<DocxImageRef> refs;
   uint32_t index = 1;
@@ -99,11 +180,13 @@ std::vector<DocxImageRef> CollectDocxImages(const ir::Document& ir_document) {
       ref.file_name = "image" + std::to_string(index) + "." + extension;
       ref.part_name = "word/media/" + ref.file_name;
       ref.data = image.data;
-      ref.width_emu = PtToEmu(std::max(1.0, image.width));
-      ref.height_emu = PtToEmu(std::max(1.0, image.height));
-      ref.x_emu = PtToEmu(std::max(0.0, image.x));
-      const double top_pt = std::max(0.0, page.height_pt - image.y - image.height);
+      const ImageBounds bounds = ResolveImageBounds(image);
+      ref.width_emu = PtToEmu(bounds.width);
+      ref.height_emu = PtToEmu(bounds.height);
+      ref.x_emu = PtToEmu(std::max(0.0, bounds.left));
+      const double top_pt = std::max(0.0, page.height_pt - (bounds.bottom + bounds.height));
       ref.y_emu = PtToEmu(top_pt);
+      ref.rotation_60000 = ResolveImageRotation60000(image);
       refs.push_back(std::move(ref));
       ++index;
     }
@@ -155,6 +238,10 @@ void AppendImageGraphic(tinyxml2::XMLDocument& document,
   pic->InsertEndChild(sp_pr);
 
   auto* xfrm = document.NewElement("a:xfrm");
+  if (image.rotation_60000 != 0) {
+    const std::string rotation = std::to_string(image.rotation_60000);
+    xfrm->SetAttribute("rot", rotation.c_str());
+  }
   sp_pr->InsertEndChild(xfrm);
 
   auto* off = document.NewElement("a:off");
@@ -264,6 +351,128 @@ void AppendImageDrawing(tinyxml2::XMLDocument& document,
   AppendImageGraphic(document, inline_drawing, image, *drawing_id);
 }
 
+void AppendTightParagraphProperties(tinyxml2::XMLDocument& document, tinyxml2::XMLElement* paragraph) {
+  auto* paragraph_properties = document.NewElement("w:pPr");
+  paragraph->InsertEndChild(paragraph_properties);
+
+  auto* spacing = document.NewElement("w:spacing");
+  spacing->SetAttribute("w:before", "0");
+  spacing->SetAttribute("w:after", "0");
+  spacing->SetAttribute("w:line", "240");
+  spacing->SetAttribute("w:lineRule", "auto");
+  paragraph_properties->InsertEndChild(spacing);
+}
+
+bool IsRightAttachedPunctuation(char ch) {
+  switch (ch) {
+    case '.':
+    case ',':
+    case ';':
+    case ':':
+    case '!':
+    case '?':
+    case ')':
+    case ']':
+    case '}':
+    case '%':
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool IsLeftAttachedBracket(char ch) {
+  switch (ch) {
+    case '(':
+    case '[':
+    case '{':
+      return true;
+    default:
+      return false;
+  }
+}
+
+std::string BuildLineText(const std::vector<const ir::TextSpan*>& line_spans) {
+  std::string line_text;
+  const ir::TextSpan* previous = nullptr;
+  for (const auto* span : line_spans) {
+    if (span == nullptr || span->text.empty()) {
+      continue;
+    }
+    if (previous != nullptr) {
+      const double gap_pt = SpanLeftX(*span) - SpanRightX(*previous);
+      const bool need_space =
+          gap_pt > 1.0 &&
+          !std::isspace(static_cast<unsigned char>(line_text.back())) &&
+          !std::isspace(static_cast<unsigned char>(span->text.front())) &&
+          !IsRightAttachedPunctuation(span->text.front()) &&
+          !IsLeftAttachedBracket(line_text.back());
+      if (need_space) {
+        line_text.push_back(' ');
+      }
+    }
+    line_text += span->text;
+    previous = span;
+  }
+  return line_text;
+}
+
+void AppendPageTextParagraphs(tinyxml2::XMLDocument& document,
+                              tinyxml2::XMLElement* body,
+                              const ir::Page& page) {
+  constexpr double kLineTolerancePt = 2.0;
+  std::vector<const ir::TextSpan*> current_line;
+  double current_line_y = 0.0;
+  bool has_current_line = false;
+
+  const auto flush_line = [&]() {
+    if (current_line.empty()) {
+      return;
+    }
+    const std::string line_text = BuildLineText(current_line);
+    current_line.clear();
+    has_current_line = false;
+    if (line_text.empty()) {
+      return;
+    }
+
+    auto* paragraph = document.NewElement("w:p");
+    body->InsertEndChild(paragraph);
+    AppendTightParagraphProperties(document, paragraph);
+
+    auto* run = document.NewElement("w:r");
+    paragraph->InsertEndChild(run);
+
+    auto* text = document.NewElement("w:t");
+    text->SetText(line_text.c_str());
+    run->InsertEndChild(text);
+  };
+
+  for (const auto& span : page.spans) {
+    if (span.text.empty()) {
+      continue;
+    }
+    const double span_line_y = SpanLineY(span);
+    if (!has_current_line) {
+      current_line.push_back(&span);
+      current_line_y = span_line_y;
+      has_current_line = true;
+      continue;
+    }
+
+    if (std::fabs(current_line_y - span_line_y) <= kLineTolerancePt) {
+      current_line.push_back(&span);
+      continue;
+    }
+
+    flush_line();
+    current_line.push_back(&span);
+    current_line_y = span_line_y;
+    has_current_line = true;
+  }
+  flush_line();
+}
+
 std::string BuildDocumentXml(const ir::Document& ir_document,
                              const std::vector<DocxImageRef>& images,
                              bool use_anchored_images) {
@@ -286,21 +495,7 @@ std::string BuildDocumentXml(const ir::Document& ir_document,
   uint32_t drawing_id = 1;
   for (size_t page_index = 0; page_index < ir_document.pages.size(); ++page_index) {
     const auto& page = ir_document.pages[page_index];
-    for (const auto& span : page.spans) {
-      if (span.text.empty()) {
-        continue;
-      }
-
-      auto* paragraph = document.NewElement("w:p");
-      body->InsertEndChild(paragraph);
-
-      auto* run = document.NewElement("w:r");
-      paragraph->InsertEndChild(run);
-
-      auto* text = document.NewElement("w:t");
-      text->SetText(span.text.c_str());
-      run->InsertEndChild(text);
-    }
+    AppendPageTextParagraphs(document, body, page);
 
     while (image_cursor < images.size() && images[image_cursor].page_index < page_index) {
       ++image_cursor;

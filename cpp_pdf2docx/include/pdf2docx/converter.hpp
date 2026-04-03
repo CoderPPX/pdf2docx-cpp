@@ -17,6 +17,12 @@ class Converter {
                      const ConvertOptions& options,
                      ConvertStats* stats) const;
 
+  Status ConvertFile(const std::string& input_pdf,
+                     const std::string& output_docx,
+                     const ConvertOptions& options,
+                     ConvertStats* stats,
+                     ir::Document* out_document) const;
+
   Status ExtractIrFromFile(const std::string& input_pdf,
                            const ConvertOptions& options,
                            ir::Document* document,

@@ -157,3 +157,14 @@ ctest --preset linux-debug
    - `windows-mingw-debug`
 
 最新 Linux 验证结果：`ctest --preset linux-debug` 通过（`16/16`）。
+
+---
+
+## 11) 增量进展（2026-04-03, 测试 fixture 回退）
+
+为避免测试环境里 `build/test.pdf` / `build/test-image-text.pdf` 缺失导致回归误失败，已在
+`CMakeLists.txt` 增加 fixture 自动回退：
+1. `PDF2DOCX_TEST_PDF`：`test.pdf -> image.pdf -> text.pdf`
+2. `PDF2DOCX_TEST_IMAGE_TEXT_PDF`：`test-image-text.pdf -> image-text.pdf -> PDF2DOCX_TEST_PDF`
+
+并在 configure 日志输出最终 fixture 路径，便于排障。

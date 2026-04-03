@@ -40,6 +40,9 @@ struct ConvertStats {
   uint32_t font_probe_count = 0;
   uint32_t backend_warning_count = 0;
   double elapsed_ms = 0.0;
+  double extract_elapsed_ms = 0.0;
+  double pipeline_elapsed_ms = 0.0;
+  double write_elapsed_ms = 0.0;
   std::string backend;
   std::string xml_backend;
 };

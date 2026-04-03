@@ -142,3 +142,28 @@ class P0Writer {
 - `ctest --preset linux-debug`：`16/16` 通过。
 - `test-image-text.pdf` 实跑产物：
   - `final_image_text.docx` 可生成，且图片与样式 part 存在。
+
+---
+
+## 12) 增量进展（2026-04-03, M12 第一阶段）
+
+已落地 anchored 几何精度改进：
+1. `CollectDocxImages` 在图片有 `quad` 时，优先用四角点求边界并映射锚定位置。
+2. 从 `quad.p0 -> quad.p1` 估算旋转角，写入 `a:xfrm rot`（单位 1/60000 度）。
+3. `docx_anchor_test` 新增断言：
+   - `wp:positionH/wp:positionV` 的 `posOffset` 与 quad 推导一致；
+   - `document.xml` 中存在 `rot=\"...\"` 属性。
+
+当前回归：`ctest --preset linux-debug` 通过（`16/16`）。
+
+---
+
+## 13) 增量进展（2026-04-03, 文本排版热修）
+
+针对文本密集 PDF 在 Word 中“段落过于稀疏”的问题，已在文本段落写出时添加紧凑段落属性：
+1. `w:spacing w:before=\"0\" w:after=\"0\"`
+2. `w:line=\"240\" w:lineRule=\"auto\"`
+
+效果：
+- 保持现有 `span -> p/r/t` 映射不变；
+- 显著减少默认段前后距导致的纵向拉散。

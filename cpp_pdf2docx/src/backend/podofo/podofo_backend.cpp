@@ -8,6 +8,7 @@
 #include <fstream>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -124,8 +125,82 @@ ImageGeometry TransformUnitRect(const PoDoFo::Matrix& matrix) {
   return geometry;
 }
 
+double WrapCoordinate(double value, double extent) {
+  if (extent <= 0.0) {
+    return value;
+  }
+  double wrapped = std::fmod(value, extent);
+  if (wrapped < 0.0) {
+    wrapped += extent;
+  }
+  return wrapped;
+}
+
+bool NeedsPageNormalization(const ir::Rect& rect, double page_width, double page_height) {
+  if (page_width <= 0.0 || page_height <= 0.0) {
+    return false;
+  }
+  return rect.x < -2.0 * page_width || rect.x > 3.0 * page_width ||
+         rect.y < -2.0 * page_height || rect.y > 3.0 * page_height;
+}
+
 bool HasFilter(const PoDoFo::PdfFilterList& filters, PoDoFo::PdfFilterType filter_type) {
   return std::find(filters.begin(), filters.end(), filter_type) != filters.end();
+}
+
+std::optional<std::tuple<std::string, std::string>> DetectBinaryMime(const PoDoFo::charbuff& buffer) {
+  if (buffer.size() >= 3 &&
+      static_cast<uint8_t>(buffer[0]) == 0xFF &&
+      static_cast<uint8_t>(buffer[1]) == 0xD8 &&
+      static_cast<uint8_t>(buffer[2]) == 0xFF) {
+    return std::make_tuple("jpg", "image/jpeg");
+  }
+
+  if (buffer.size() >= 8 &&
+      static_cast<uint8_t>(buffer[0]) == 0x89 &&
+      buffer[1] == 'P' &&
+      buffer[2] == 'N' &&
+      buffer[3] == 'G' &&
+      static_cast<uint8_t>(buffer[4]) == 0x0D &&
+      static_cast<uint8_t>(buffer[5]) == 0x0A &&
+      static_cast<uint8_t>(buffer[6]) == 0x1A &&
+      static_cast<uint8_t>(buffer[7]) == 0x0A) {
+    return std::make_tuple("png", "image/png");
+  }
+
+  if (buffer.size() >= 12 &&
+      static_cast<uint8_t>(buffer[0]) == 0x00 &&
+      static_cast<uint8_t>(buffer[1]) == 0x00 &&
+      static_cast<uint8_t>(buffer[2]) == 0x00 &&
+      static_cast<uint8_t>(buffer[3]) == 0x0C &&
+      buffer[4] == 'j' &&
+      buffer[5] == 'P' &&
+      buffer[6] == ' ' &&
+      buffer[7] == ' ' &&
+      static_cast<uint8_t>(buffer[8]) == 0x0D &&
+      static_cast<uint8_t>(buffer[9]) == 0x0A &&
+      static_cast<uint8_t>(buffer[10]) == 0x87 &&
+      static_cast<uint8_t>(buffer[11]) == 0x0A) {
+    return std::make_tuple("jp2", "image/jp2");
+  }
+
+  if (buffer.size() >= 6 &&
+      buffer[0] == 'G' &&
+      buffer[1] == 'I' &&
+      buffer[2] == 'F' &&
+      buffer[3] == '8' &&
+      (buffer[4] == '7' || buffer[4] == '9') &&
+      buffer[5] == 'a') {
+    return std::make_tuple("gif", "image/gif");
+  }
+
+  if (buffer.size() >= 2 &&
+      buffer[0] == 'B' &&
+      buffer[1] == 'M') {
+    return std::make_tuple("bmp", "image/bmp");
+  }
+
+  return std::nullopt;
 }
 
 #if PDF2DOCX_HAS_ZLIB
@@ -212,7 +287,7 @@ bool EncodePngRgba(const std::vector<uint8_t>& rgba_data,
 }
 #endif
 
-std::optional<ExtractedImageBinary> TryExtractFlateImageAsPng(const PoDoFo::PdfImage& image) {
+std::optional<ExtractedImageBinary> TryExtractDecodedImageAsPng(const PoDoFo::PdfImage& image) {
 #if PDF2DOCX_HAS_ZLIB
   try {
     const uint32_t width = image.GetWidth();
@@ -221,16 +296,66 @@ std::optional<ExtractedImageBinary> TryExtractFlateImageAsPng(const PoDoFo::PdfI
       return std::nullopt;
     }
 
-    PoDoFo::charbuff decoded_rgba;
-    image.DecodeTo(decoded_rgba, PoDoFo::PdfPixelFormat::RGBA);
-    const size_t expected_size = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
-    if (decoded_rgba.size() != expected_size) {
-      return std::nullopt;
+    const size_t pixel_count = static_cast<size_t>(width) * static_cast<size_t>(height);
+    const size_t expected_rgba_size = pixel_count * 4;
+
+    std::vector<uint8_t> rgba;
+    rgba.reserve(expected_rgba_size);
+
+    bool decoded = false;
+    try {
+      PoDoFo::charbuff decoded_rgba;
+      image.DecodeTo(decoded_rgba, PoDoFo::PdfPixelFormat::RGBA);
+      if (decoded_rgba.size() == expected_rgba_size) {
+        rgba.assign(decoded_rgba.begin(), decoded_rgba.end());
+        decoded = true;
+      }
+    } catch (...) {
+      decoded = false;
     }
 
-    std::vector<uint8_t> rgba(decoded_rgba.size());
-    for (size_t i = 0; i < decoded_rgba.size(); ++i) {
-      rgba[i] = static_cast<uint8_t>(decoded_rgba[i]);
+    if (!decoded) {
+      try {
+        PoDoFo::charbuff decoded_rgb;
+        image.DecodeTo(decoded_rgb, PoDoFo::PdfPixelFormat::RGB24);
+        const size_t expected_rgb_size = pixel_count * 3;
+        if (decoded_rgb.size() == expected_rgb_size) {
+          rgba.resize(expected_rgba_size);
+          for (size_t i = 0, j = 0; i < expected_rgb_size; i += 3, j += 4) {
+            rgba[j + 0] = static_cast<uint8_t>(decoded_rgb[i + 0]);
+            rgba[j + 1] = static_cast<uint8_t>(decoded_rgb[i + 1]);
+            rgba[j + 2] = static_cast<uint8_t>(decoded_rgb[i + 2]);
+            rgba[j + 3] = 255;
+          }
+          decoded = true;
+        }
+      } catch (...) {
+        decoded = false;
+      }
+    }
+
+    if (!decoded) {
+      try {
+        PoDoFo::charbuff decoded_gray;
+        image.DecodeTo(decoded_gray, PoDoFo::PdfPixelFormat::Grayscale);
+        if (decoded_gray.size() == pixel_count) {
+          rgba.resize(expected_rgba_size);
+          for (size_t i = 0, j = 0; i < pixel_count; ++i, j += 4) {
+            const uint8_t g = static_cast<uint8_t>(decoded_gray[i]);
+            rgba[j + 0] = g;
+            rgba[j + 1] = g;
+            rgba[j + 2] = g;
+            rgba[j + 3] = 255;
+          }
+          decoded = true;
+        }
+      } catch (...) {
+        decoded = false;
+      }
+    }
+
+    if (!decoded || rgba.size() != expected_rgba_size) {
+      return std::nullopt;
     }
 
     std::vector<uint8_t> png_data;
@@ -283,12 +408,39 @@ ImageExtractResult TryExtractImageBinary(const PoDoFo::PdfImage& image) {
   }
 
   if (HasFilter(filters, PoDoFo::PdfFilterType::FlateDecode)) {
-    auto png = TryExtractFlateImageAsPng(image);
+    auto png = TryExtractDecodedImageAsPng(image);
     if (png.has_value()) {
       result.image = std::move(png);
       return result;
     }
     result.failure_reason = ImageExtractFailureReason::DecodeFailed;
+    return result;
+  }
+
+  // Fallback 1: detect known binary payload by magic bytes.
+  PoDoFo::charbuff raw_buffer;
+  try {
+    raw_buffer = stream->GetCopy(true);
+  } catch (...) {
+    raw_buffer = stream->GetCopySafe();
+  }
+  if (!raw_buffer.empty()) {
+    auto detected = DetectBinaryMime(raw_buffer);
+    if (detected.has_value()) {
+      ExtractedImageBinary binary;
+      binary.extension = std::get<0>(detected.value());
+      binary.mime_type = std::get<1>(detected.value());
+      binary.data.assign(raw_buffer.begin(), raw_buffer.end());
+      result.image = std::move(binary);
+      return result;
+    }
+  }
+
+  // Fallback for other filter combinations (including color-space specific
+  // cases): try decode-to-RGBA and export PNG.
+  auto fallback_png = TryExtractDecodedImageAsPng(image);
+  if (fallback_png.has_value()) {
+    result.image = std::move(fallback_png);
     return result;
   }
 
@@ -470,12 +622,42 @@ Status PoDoFoBackend::ExtractToIr(const std::string& pdf_path,
             continue;
           }
 
-          const PoDoFo::Matrix placement_matrix = current_matrix * xobject->GetMatrix();
+          // Image placement is determined by the current graphics state CTM
+          // at the Do operator. Unlike form XObjects, image XObjects do not
+          // require an additional object matrix multiplication here.
+          const PoDoFo::Matrix placement_matrix = current_matrix;
           ImageGeometry geometry = TransformUnitRect(placement_matrix);
           ir::Rect image_rect = geometry.rect;
           if (image_rect.width <= 0.0 || image_rect.height <= 0.0) {
             image_rect.width = std::max(1.0, static_cast<double>(image->GetWidth()));
             image_rect.height = std::max(1.0, static_cast<double>(image->GetHeight()));
+            ++local_image_stats.warning_count;
+          }
+
+          if (NeedsPageNormalization(image_rect, ir_page.width_pt, ir_page.height_pt)) {
+            const double old_x = image_rect.x;
+            const double old_y = image_rect.y;
+            image_rect.x = WrapCoordinate(image_rect.x, ir_page.width_pt);
+            image_rect.y = WrapCoordinate(image_rect.y, ir_page.height_pt);
+            image_rect.width = std::min(image_rect.width, std::max(1.0, ir_page.width_pt));
+            image_rect.height = std::min(image_rect.height, std::max(1.0, ir_page.height_pt));
+            if (image_rect.x + image_rect.width > ir_page.width_pt) {
+              image_rect.x = std::max(0.0, ir_page.width_pt - image_rect.width);
+            }
+            if (image_rect.y + image_rect.height > ir_page.height_pt) {
+              image_rect.y = std::max(0.0, ir_page.height_pt - image_rect.height);
+            }
+
+            const double dx = image_rect.x - old_x;
+            const double dy = image_rect.y - old_y;
+            geometry.quad.p0.x += dx;
+            geometry.quad.p0.y += dy;
+            geometry.quad.p1.x += dx;
+            geometry.quad.p1.y += dy;
+            geometry.quad.p2.x += dx;
+            geometry.quad.p2.y += dy;
+            geometry.quad.p3.x += dx;
+            geometry.quad.p3.y += dy;
             ++local_image_stats.warning_count;
           }
 

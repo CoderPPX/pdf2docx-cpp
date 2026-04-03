@@ -165,3 +165,18 @@ class Pipeline {
 2. 启用了最小 `SortSpansStage` 逻辑（页内先 y 后 x，稳定排序）。
 3. 新增 `PipelineStats` 并在 `converter` 调用链中接入。
 4. `pipeline_test` 已扩展为排序行为断言，当前回归通过。
+
+---
+
+## 12) 增量进展（2026-04-03, M11）
+
+已落地“行内合并”阶段（在排序之后执行）：
+1. pipeline 新增同一行近邻 span 合并逻辑，保守阈值如下：
+   - 行对齐容差：沿用 `kLineTolerancePt`
+   - 允许小重叠：`kMergeOverlapTolerancePt`
+   - 最大合并间距：`kMergeGapMaxPt`
+2. 新增空格注入规则，避免把标点前误加空格。
+3. `PipelineStats` 新增字段：`merged_span_count`。
+4. `pipeline_test` 新增合并用例：`Hello + world -> Hello world`，并验证 `merged_span_count > 0`。
+
+当前回归：`ctest --preset linux-debug` 通过（`16/16`）。

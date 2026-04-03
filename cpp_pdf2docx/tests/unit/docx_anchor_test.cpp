@@ -177,6 +177,13 @@ int main() {
       .y = 180.0,
       .width = 120.0,
       .height = 90.0,
+      .has_quad = true,
+      .quad = pdf2docx::ir::Quad{
+          .p0 = pdf2docx::ir::Point{100.0, 200.0},
+          .p1 = pdf2docx::ir::Point{220.0, 220.0},
+          .p2 = pdf2docx::ir::Point{90.0, 280.0},
+          .p3 = pdf2docx::ir::Point{210.0, 300.0},
+      },
       .data = {0x89, 'P', 'N', 'G'},
   });
   document.pages.push_back(std::move(page));
@@ -211,6 +218,15 @@ int main() {
     return EXIT_FAILURE;
   }
   if (document_xml.find("<wp:positionH") == std::string::npos) {
+    return EXIT_FAILURE;
+  }
+  if (document_xml.find("<wp:posOffset>1143000</wp:posOffset>") == std::string::npos) {
+    return EXIT_FAILURE;
+  }
+  if (document_xml.find("<wp:posOffset>6883400</wp:posOffset>") == std::string::npos) {
+    return EXIT_FAILURE;
+  }
+  if (document_xml.find("rot=\"") == std::string::npos) {
     return EXIT_FAILURE;
   }
 #endif

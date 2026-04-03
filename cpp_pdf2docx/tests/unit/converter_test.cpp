@@ -17,7 +17,9 @@ int main() {
   pdf2docx::Converter converter(pdf2docx::BackendKind::kPoDoFo);
   pdf2docx::ConvertOptions options;
   pdf2docx::ConvertStats stats;
-  pdf2docx::Status status = converter.ConvertFile(input_pdf.string(), output_docx.string(), options, &stats);
+  pdf2docx::ir::Document extracted_document;
+  pdf2docx::Status status =
+      converter.ConvertFile(input_pdf.string(), output_docx.string(), options, &stats, &extracted_document);
   if (!status.ok()) {
     return EXIT_FAILURE;
   }
@@ -37,13 +39,31 @@ int main() {
   if (stats.page_count == 0) {
     return EXIT_FAILURE;
   }
+  if (stats.page_count != extracted_document.pages.size()) {
+    return EXIT_FAILURE;
+  }
   if (stats.image_count == 0) {
+    return EXIT_FAILURE;
+  }
+  size_t extracted_image_count = 0;
+  for (const auto& page : extracted_document.pages) {
+    extracted_image_count += page.images.size();
+  }
+  if (stats.image_count != extracted_image_count) {
     return EXIT_FAILURE;
   }
   if (stats.extracted_image_count != stats.image_count) {
     return EXIT_FAILURE;
   }
   if (stats.backend_warning_count != stats.warning_count) {
+    return EXIT_FAILURE;
+  }
+  if (stats.extract_elapsed_ms < 0.0 || stats.pipeline_elapsed_ms < 0.0 || stats.write_elapsed_ms < 0.0) {
+    return EXIT_FAILURE;
+  }
+  if (stats.elapsed_ms < stats.extract_elapsed_ms ||
+      stats.elapsed_ms < stats.pipeline_elapsed_ms ||
+      stats.elapsed_ms < stats.write_elapsed_ms) {
     return EXIT_FAILURE;
   }
 

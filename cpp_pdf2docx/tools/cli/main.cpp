@@ -43,30 +43,29 @@ int main(int argc, char** argv) {
   }
 
   pdf2docx::ConvertStats stats;
+  pdf2docx::ir::Document dump_ir_document;
+  pdf2docx::ir::Document* dump_ir_ptr = dump_ir_path.empty() ? nullptr : &dump_ir_document;
 
-  pdf2docx::Status status = converter.ConvertFile(input_pdf, output_docx, options, &stats);
+  pdf2docx::Status status = converter.ConvertFile(input_pdf, output_docx, options, &stats, dump_ir_ptr);
   if (!status.ok()) {
     std::cerr << "Convert failed: " << status.message() << "\n";
     return 2;
   }
 
   if (!dump_ir_path.empty()) {
-    pdf2docx::ir::Document document;
-    pdf2docx::Status extract_status = converter.ExtractIrFromFile(input_pdf, options, &document);
-    if (!extract_status.ok()) {
-      std::cerr << "Dump IR failed during extraction: " << extract_status.message() << "\n";
-      return 3;
-    }
-    pdf2docx::Status write_status = pdf2docx::WriteIrToJson(document, dump_ir_path);
+    pdf2docx::Status write_status = pdf2docx::WriteIrToJson(dump_ir_document, dump_ir_path);
     if (!write_status.ok()) {
       std::cerr << "Dump IR failed during write: " << write_status.message() << "\n";
-      return 4;
+      return 3;
     }
   }
 
   std::cout << "P1 convert done. backend=" << stats.backend
             << " xml=" << stats.xml_backend
             << " elapsed_ms=" << stats.elapsed_ms
+            << " extract_ms=" << stats.extract_elapsed_ms
+            << " pipeline_ms=" << stats.pipeline_elapsed_ms
+            << " write_ms=" << stats.write_elapsed_ms
             << " pages=" << stats.page_count
             << " images=" << stats.image_count
             << " skipped_images=" << stats.skipped_image_count

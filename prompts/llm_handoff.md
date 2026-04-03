@@ -1,9 +1,9 @@
 # LLM 续作交接说明（2026-04-03）
 
-- 更新时间：`2026-04-03 07:20 EDT (-0400)`
+- 更新时间：`2026-04-03 07:41 EDT (-0400)`
 - 项目根目录：`/home/zhj/Projects/pdftools`
 - 主工程目录：`/home/zhj/Projects/pdftools/cpp_pdf2docx`
-- 当前状态：**M01~M09 + FINAL 清单已执行完毕，Linux 本地回归 `16/16` 全绿**
+- 当前状态：**M01~M13（M12 第一阶段）已执行并通过，Linux 本地回归 `16/16` 全绿**
 
 ---
 
@@ -62,6 +62,28 @@
    - `pdf2ir` 输出 summary（pages/spans/images）。
    - `ir2html` 新增 `--only-page N`。
 
+10. 模块 10（`--dump-ir` 复用优化）
+   - `Converter` 新增 `ConvertFile(..., ConvertStats*, ir::Document*)` 重载。
+   - `pdf2docx --dump-ir` 改为复用单次提取 IR，去掉二次解析。
+
+11. 模块 11（Pipeline 文本增强）
+   - 在排序后新增行内近邻 span 合并。
+   - `PipelineStats` 新增 `merged_span_count`，并补单测覆盖。
+
+12. 模块 12（anchored 精度第一阶段）
+   - `P0Writer` 锚定边界优先使用 `ImageBlock.quad`。
+   - 写出 `a:xfrm rot`（基于 quad 估算旋转角）。
+   - `docx_anchor_test` 增加偏移与旋转断言。
+
+13. 模块 13（阶段耗时可观测）
+   - `ConvertStats` 增加 `extract/pipeline/write` 分段耗时字段。
+   - CLI 输出增加 `extract_ms/pipeline_ms/write_ms`。
+
+14. Hotfix（image-text 专项）
+   - 修复 title 乱排：writer 按同一行聚合 span 再写段落。
+   - 修复 ICCBased 图片缺失：PoDoFo 颜色空间 fallback + 后端回退增强。
+   - 修复异常图片坐标：对极端几何做 page 归一化与边界裁剪。
+
 ---
 
 ## C. 当前可用能力
@@ -70,6 +92,8 @@
 2. `pdf2ir`：PDF -> IR JSON（含 summary、每页 span/image 计数、图片 `data_size`、可选 quad）。
 3. `ir2html`：PDF -> HTML 绝对定位预览（含图片 + quad overlay + only-page）。
 4. 统计可观测：转换后可看到页数、图片数、跳过原因、warning 数。
+5. `--dump-ir` 已是单次提取复用路径（不再重复解析 PDF）。
+6. 统计含分段耗时：`extract_ms`、`pipeline_ms`、`write_ms`。
 
 ---
 
@@ -77,8 +101,8 @@
 
 1. 仍以 PoDoFo 后端为主，Poppler backend 未落地。
 2. 图片格式虽新增 Flate 路径，但复杂滤镜/颜色空间仍会出现跳过或 warning。
-3. DOCX anchored 仅为近似布局，不是高保真版式复现。
-4. Pipeline 仅实现基础排序，尚未进入行/段落/表格语义阶段。
+3. DOCX anchored 仍是近似布局（虽支持 quad 边界与旋转属性），尚未达到高保真版式复现。
+4. Pipeline 已有“排序 + 行内合并”，writer 也已做行聚合；但段落/标题/表格语义阶段尚未完成。
 
 ---
 

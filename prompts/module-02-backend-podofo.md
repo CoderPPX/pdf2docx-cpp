@@ -173,3 +173,35 @@ ID 规则：
 2. 图片导出新增 `FlateDecode -> PNG` 路径（RGBA 解码后封装 PNG）。
 3. 单图 decode 异常不再中断整份文档，改为“单图跳过并计数”。
 4. `ConvertStats` 已接入后端统计映射（`warning_count`/skip reason 细分）。
+
+---
+
+## 12) 增量进展（2026-04-03, 图片兼容回退增强）
+
+已补充两层图片回退策略：
+1. 过滤器未知时，先尝试对原始 stream 字节做魔数识别（JPEG/PNG/JP2/GIF/BMP）并原样写出。
+   - 原始流优先使用 `GetCopy(true)`，失败时回落 `GetCopySafe()`。
+2. 解码转 PNG 路径从仅 `RGBA` 扩展到：
+   - `RGBA`
+   - `RGB24 -> RGBA`
+   - `Grayscale -> RGBA`
+
+说明：
+- 后续已继续补齐 `ICCBased` 色彩空间 fallback（PoDoFo 侧），当前 `image-text.pdf` 已实现 `skipped_images=0`。
+
+---
+
+## 13) 增量进展（2026-04-03, ICCBased 专项）
+
+为解决 `image-text.pdf` 中 ICCBased 图片缺失，已补两层修复：
+1. 在 `thirdparty/podofo` 的 `PdfColorSpaceFilterFactory::TryCreateFromObject` 中增加
+   `PdfColorSpaceType::ICCBased` 分支：
+   - 优先解析 `Alternate` 颜色空间；
+   - 其次按 `N` 分量数映射 `DeviceGray/RGB/CMYK`；
+   - 最后保守回落 `DeviceRGB`。
+2. 在本项目后端增加异常几何 page 归一化，避免极端 CTM 导致图片坐标落到页面外。
+
+验证结果（`build/image-text.pdf`）：
+- `images=7`
+- `skipped_images=0`
+- `warning_count=7`（主要来自几何归一化警告）

@@ -665,3 +665,218 @@
 ### 4) 当前结论
 
 - roadmap 对应 checklist 条目（M01~M09 + FINAL）已落地完成并有可复现命令。
+
+---
+
+## M10 持续推进记录（`--dump-ir` 单次提取复用）
+
+- 记录时间：`2026-04-03 07:34:00 EDT (-0400)`
+
+### 1) API 扩展
+
+- 更新：
+  - `cpp_pdf2docx/include/pdf2docx/converter.hpp`
+  - `cpp_pdf2docx/src/api/converter.cpp`
+- 新增重载：
+  - `ConvertFile(..., ConvertStats* stats, ir::Document* out_document)`
+- 行为：
+  - 转换链路中可直接返回已提取并经过 pipeline 的 IR；
+  - 旧 4 参数接口保持兼容，内部转调新重载。
+
+### 2) CLI 去重提取
+
+- 更新：
+  - `cpp_pdf2docx/tools/cli/main.cpp`
+- 行为：
+  - `--dump-ir` 改为复用 `ConvertFile` 返回 IR；
+  - 删除原先“转换后再次 `ExtractIrFromFile`”的重复路径。
+
+### 3) 测试补充
+
+- 更新：
+  - `cpp_pdf2docx/tests/unit/converter_test.cpp`
+- 新增断言：
+  - 返回 IR 的 `page_count` 与 `stats.page_count` 一致；
+  - 返回 IR 图片总数与 `stats.image_count` 一致。
+
+### 4) 验证
+
+- `cmake --build --preset linux-debug -j4`：通过
+- `ctest --preset linux-debug`：通过（`16/16`）
+- `pdf2docx --dump-ir` 实跑：成功产出 docx + json。
+
+---
+
+## M11 持续推进记录（Pipeline 行内合并）
+
+- 记录时间：`2026-04-03 07:37:00 EDT (-0400)`
+
+### 1) Pipeline 算法增强
+
+- 更新：
+  - `cpp_pdf2docx/src/pipeline/pipeline.hpp`
+  - `cpp_pdf2docx/src/pipeline/pipeline.cpp`
+- 新增：
+  - `PipelineStats.merged_span_count`
+- 算法：
+  - 排序后执行同一行近邻 span 合并；
+  - 通过间距阈值、重叠容差、标点空格规则避免误合并。
+
+### 2) 测试
+
+- 更新：
+  - `cpp_pdf2docx/tests/unit/pipeline_test.cpp`
+- 新增场景：
+  - `Hello` + `world` 合并为 `Hello world`；
+  - 验证 `merged_span_count > 0`。
+
+### 3) 验证
+
+- `ctest --preset linux-debug`：通过（`16/16`）。
+
+---
+
+## M12 持续推进记录（anchored 几何第一阶段）
+
+- 记录时间：`2026-04-03 07:40:00 EDT (-0400)`
+
+### 1) quad 驱动锚定边界
+
+- 更新：
+  - `cpp_pdf2docx/src/docx/p0_writer.cpp`
+- 行为：
+  - 图片存在 `quad` 时，优先按四角点求边界；
+  - anchored 位置偏移基于该边界计算。
+
+### 2) 旋转属性写出
+
+- 更新：
+  - `cpp_pdf2docx/src/docx/p0_writer.cpp`
+- 行为：
+  - 从 `quad.p0 -> quad.p1` 估算角度；
+  - 写入 `a:xfrm rot="..."`（1/60000 度单位）。
+
+### 3) 测试增强
+
+- 更新：
+  - `cpp_pdf2docx/tests/unit/docx_anchor_test.cpp`
+- 新增断言：
+  - 锚定 `posOffset` 与 quad 推导值一致；
+  - XML 中存在 `rot` 属性。
+
+### 4) 验证
+
+- `ctest --preset linux-debug`：通过（`16/16`）。
+- `pdf2docx --docx-anchored --dump-ir`（`test-image-text.pdf`）实跑成功。
+
+---
+
+## M13 持续推进记录（阶段耗时可观测性）
+
+- 记录时间：`2026-04-03 07:45:00 EDT (-0400)`
+
+### 1) 统计结构扩展
+
+- 更新：
+  - `cpp_pdf2docx/include/pdf2docx/types.hpp`
+- 新增字段：
+  - `extract_elapsed_ms`
+  - `pipeline_elapsed_ms`
+  - `write_elapsed_ms`
+
+### 2) 转换流程计时
+
+- 更新：
+  - `cpp_pdf2docx/src/api/converter.cpp`
+- 行为：
+  - 对 extraction/pipeline/writer 三阶段分别计时并写入 `ConvertStats`。
+
+### 3) CLI 输出增强
+
+- 更新：
+  - `cpp_pdf2docx/tools/cli/main.cpp`
+- 输出新增：
+  - `extract_ms`
+  - `pipeline_ms`
+  - `write_ms`
+
+### 4) 测试补充
+
+- 更新：
+  - `cpp_pdf2docx/tests/unit/converter_test.cpp`
+- 新增断言：
+  - 分段耗时非负；
+  - 分段耗时不超过总耗时。
+
+### 5) 验证
+
+- `ctest --preset linux-debug`：通过（`16/16`）。
+- `pdf2docx --dump-ir` 实跑输出已带三段耗时。
+
+---
+
+## Hotfix 记录（`final_image_text.docx` 质量问题排查与修复）
+
+- 记录时间：`2026-04-03 08:06:00 EDT (-0400)`
+
+### 1) 问题复现
+
+- 用户反馈：
+  - `build/final_anchored.docx` 正常；
+  - `build/final_image_text.docx` 文字排版差，且部分图片无法加载。
+- 排查结论：
+  1. 文本问题：旧产物来自“每词独立段落 + 默认段距”阶段，版面会被拉散。
+  2. 图片问题：`image-text.pdf` 抽取阶段仍有 `skipped_images=5`（`ICCBased` 相关），不是关系表丢失。
+
+### 2) 已做修复
+
+1. DOCX 文本段落增加紧凑段落属性（`before/after=0`，固定行距规则）。
+2. 后端图片回退增强：
+   - 未知滤镜下尝试原始字节魔数识别；
+   - PNG 回退支持 `RGBA/RGB24/Grayscale` 多解码路径。
+   - 未知滤镜场景优先尝试 `GetCopy(true)` 读取原始流字节，再回落 `GetCopySafe()`。
+3. 测试 fixture 路径改为自动回退，避免 `test*.pdf` 缺失导致假失败。
+
+### 3) 验证结果
+
+- `cmake --preset linux-debug && cmake --build --preset linux-debug -j4 && ctest --preset linux-debug`：通过（`16/16`）。
+- 重新生成：
+  - `build/final_image_text.docx`
+  - `build/final_anchored.docx`
+  - `build/final_dump_ir.json`
+- 当前 `image-text.pdf` 统计仍为：
+  - `images=2 skipped_images=5 warnings=5`
+  - 说明 `ICCBased` 相关图片仍待后续专项修复。
+
+### 4) 针对 `final_dump_ir.json` line45/93 的定位结论
+
+1. `line45` 与 `line93` 分别位于 page1/page2 的 `images` 数组，当前确实为空（`image_count=0`）。
+2. 使用 `pdfimages -list build/image-text.pdf` 对照发现：
+   - page1/page2 存在 `icc` 颜色空间图像对象（`enc image`）；
+   - 当前后端在这些对象上触发 `Unsupported color space filter ICCBased`，最终进入 skip。
+3. 因此这不是 JSON 写出错误，而是后端对该 PDF 某些 ICCBased 图像解码失败导致的“提取前缺失”。
+
+### 5) ICCBased 专项修复（已落地）
+
+1. 在 PoDoFo 侧增加 `ICCBased` 颜色空间 fallback（优先 `Alternate`，其次按 `N` 推断，最后回落 `DeviceRGB`）。
+2. 后端抽图在未知滤镜场景继续保留：
+   - 原始流魔数识别；
+   - 多像素格式 decode-to-PNG（RGBA/RGB24/Gray）。
+3. 对异常几何（超大负坐标）增加 page 归一化与边界裁剪，使图片可见区域落在页面内。
+
+修复后结果（`build/image-text.pdf`）：
+- `images=7`
+- `skipped_images=0`
+- page1/page2 的 `images` 不再为空。
+
+### 6) 标题排版问题根因与修复
+
+1. 根因：
+   - PoDoFo 提取标题为同一行多个离散 span（如 `Auto` / `Painter:` / `From` ...）；
+   - 旧 writer 把每个 span 单独写成一个 `w:p`，导致标题在 Word 中看起来“散行/乱排”。
+2. 修复：
+   - 在 `p0_writer.cpp` 增加“按同一行 y 聚合 span -> 单段落”逻辑；
+   - 同时保持紧凑段落间距设置。
+3. 结果：
+   - 新版 `build/final_image_text.docx` 标题区域排版明显改善；
+   - 且图片抽取问题已同步修复（见上一节）。

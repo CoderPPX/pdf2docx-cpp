@@ -63,29 +63,42 @@ Status Converter::ConvertFile(const std::string& input_pdf,
                               const std::string& output_docx,
                               const ConvertOptions& options,
                               ConvertStats* stats) const {
+  return ConvertFile(input_pdf, output_docx, options, stats, nullptr);
+}
+
+Status Converter::ConvertFile(const std::string& input_pdf,
+                              const std::string& output_docx,
+                              const ConvertOptions& options,
+                              ConvertStats* stats,
+                              ir::Document* out_document) const {
   if (input_pdf.empty() || output_docx.empty()) {
     return Status::Error(ErrorCode::kInvalidArgument, "input/output path must not be empty");
   }
 
   const auto started = std::chrono::steady_clock::now();
 
-  ir::Document ir_document;
+  ir::Document local_document;
+  ir::Document* ir_document = out_document != nullptr ? out_document : &local_document;
   ImageExtractionStats image_extraction_stats;
-  Status extract_status = ExtractIrFromFile(input_pdf, options, &ir_document, &image_extraction_stats);
+  const auto extract_started = std::chrono::steady_clock::now();
+  Status extract_status = ExtractIrFromFile(input_pdf, options, ir_document, &image_extraction_stats);
+  const auto extract_ended = std::chrono::steady_clock::now();
   if (!extract_status.ok()) {
     return extract_status;
   }
 
   pipeline::Pipeline pipeline;
   pipeline::PipelineStats pipeline_stats;
-  Status pipeline_status = pipeline.Execute(&ir_document, &pipeline_stats);
+  const auto pipeline_started = std::chrono::steady_clock::now();
+  Status pipeline_status = pipeline.Execute(ir_document, &pipeline_stats);
+  const auto pipeline_ended = std::chrono::steady_clock::now();
   if (!pipeline_status.ok()) {
     return pipeline_status;
   }
 
   ConvertStats local_stats;
-  local_stats.page_count = static_cast<uint32_t>(ir_document.pages.size());
-  local_stats.image_count = CountImages(ir_document);
+  local_stats.page_count = static_cast<uint32_t>(ir_document->pages.size());
+  local_stats.image_count = CountImages(*ir_document);
   local_stats.warning_count = image_extraction_stats.warning_count;
   local_stats.extracted_image_count = image_extraction_stats.extracted_count;
   local_stats.skipped_image_count = image_extraction_stats.skipped_count;
@@ -96,16 +109,27 @@ Status Converter::ConvertFile(const std::string& input_pdf,
   local_stats.backend_warning_count = image_extraction_stats.warning_count;
   local_stats.backend = BackendToString(backend_);
   local_stats.xml_backend = PDF2DOCX_XML_BACKEND_STR;
+  local_stats.extract_elapsed_ms =
+      static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(extract_ended - extract_started)
+                              .count());
+  local_stats.pipeline_elapsed_ms =
+      static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(pipeline_ended - pipeline_started)
+                              .count());
 
   docx::P0Writer writer;
   docx::DocxWriteOptions write_options;
   write_options.use_anchored_images = options.docx_use_anchored_images;
-  Status write_status = writer.WriteFromIr(ir_document, output_docx, local_stats, write_options);
+  const auto write_started = std::chrono::steady_clock::now();
+  Status write_status = writer.WriteFromIr(*ir_document, output_docx, local_stats, write_options);
+  const auto write_ended = std::chrono::steady_clock::now();
   if (!write_status.ok()) {
     return write_status;
   }
+  local_stats.write_elapsed_ms =
+      static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(write_ended - write_started)
+                              .count());
 
-  const auto ended = std::chrono::steady_clock::now();
+  const auto ended = write_ended;
   local_stats.elapsed_ms =
       static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(ended - started).count());
 

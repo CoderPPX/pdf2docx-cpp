@@ -11,6 +11,7 @@ struct PipelineStats {
   uint32_t page_count = 0;
   uint32_t reordered_page_count = 0;
   uint32_t reordered_span_count = 0;
+  uint32_t merged_span_count = 0;
 };
 
 class Pipeline {
