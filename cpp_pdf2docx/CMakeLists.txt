@@ -10,6 +10,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(PDF2DOCX_USE_BUNDLED_DEPS "Use third_party dependencies" ON)
 option(PDF2DOCX_ADD_SUBDIR_DEPS "Try add_subdirectory on third_party dependencies" ON)
+option(PDF2DOCX_STRICT_DEPS "Fail configure when required dependencies are missing" OFF)
 option(PDF2DOCX_BUILD_SHARED "Build shared library" OFF)
 option(PDF2DOCX_ENABLE_TESTS "Enable tests" ON)
 option(PDF2DOCX_ENABLE_CLI "Enable CLI tool" ON)
@@ -21,7 +22,12 @@ set(PDF2DOCX_THIRDPARTY_ROOT "${CMAKE_SOURCE_DIR}/../thirdparty" CACHE PATH "Pat
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 include(Dependencies)
 
-pdf2docx_import_dependencies("${PDF2DOCX_THIRDPARTY_ROOT}" ${PDF2DOCX_USE_BUNDLED_DEPS} ${PDF2DOCX_ADD_SUBDIR_DEPS})
+pdf2docx_import_dependencies(
+  "${PDF2DOCX_THIRDPARTY_ROOT}"
+  ${PDF2DOCX_USE_BUNDLED_DEPS}
+  ${PDF2DOCX_ADD_SUBDIR_DEPS}
+  ${PDF2DOCX_STRICT_DEPS}
+)
 
 set(PDF2DOCX_LIBRARY_TYPE STATIC)
 if(PDF2DOCX_BUILD_SHARED)
@@ -31,9 +37,11 @@ endif()
 add_library(pdf2docx_core ${PDF2DOCX_LIBRARY_TYPE}
   src/core/status.cpp
   src/core/ir_html.cpp
+  src/core/ir_json.cpp
   src/api/converter.cpp
   src/backend/podofo/podofo_backend.cpp
   src/font/freetype_probe.cpp
+  src/font/font_resolver.cpp
   src/pipeline/pipeline.cpp
   src/docx/p0_writer.cpp
 )
@@ -94,6 +102,7 @@ if(PDF2DOCX_ENABLE_TESTS)
   include(CTest)
   if(BUILD_TESTING)
     set(PDF2DOCX_TEST_PDF "${CMAKE_SOURCE_DIR}/build/test.pdf")
+    set(PDF2DOCX_TEST_IMAGE_TEXT_PDF "${CMAKE_SOURCE_DIR}/build/test-image-text.pdf")
 
     add_executable(pdf2docx_status_test tests/unit/status_test.cpp)
     target_link_libraries(pdf2docx_status_test PRIVATE pdf2docx::core)
@@ -111,12 +120,18 @@ if(PDF2DOCX_ENABLE_TESTS)
 
     add_executable(pdf2docx_converter_test tests/unit/converter_test.cpp)
     target_link_libraries(pdf2docx_converter_test PRIVATE pdf2docx::core)
-    target_compile_definitions(pdf2docx_converter_test PRIVATE PDF2DOCX_TEST_PDF_PATH="${PDF2DOCX_TEST_PDF}")
+    target_compile_definitions(pdf2docx_converter_test PRIVATE
+      PDF2DOCX_TEST_PDF_PATH="${PDF2DOCX_TEST_PDF}"
+      PDF2DOCX_TEST_IMAGE_TEXT_PDF_PATH="${PDF2DOCX_TEST_IMAGE_TEXT_PDF}")
     add_test(NAME converter_test COMMAND pdf2docx_converter_test)
 
     add_executable(pdf2docx_freetype_test tests/unit/freetype_test.cpp)
     target_link_libraries(pdf2docx_freetype_test PRIVATE pdf2docx::core)
     add_test(NAME freetype_test COMMAND pdf2docx_freetype_test)
+
+    add_executable(pdf2docx_font_resolver_test tests/unit/font_resolver_test.cpp)
+    target_link_libraries(pdf2docx_font_resolver_test PRIVATE pdf2docx::core)
+    add_test(NAME font_resolver_test COMMAND pdf2docx_font_resolver_test)
 
     add_executable(pdf2docx_pipeline_test tests/unit/pipeline_test.cpp)
     target_link_libraries(pdf2docx_pipeline_test PRIVATE pdf2docx::core)
@@ -127,9 +142,17 @@ if(PDF2DOCX_ENABLE_TESTS)
     target_link_libraries(pdf2docx_ir_html_test PRIVATE pdf2docx::core)
     add_test(NAME ir_html_test COMMAND pdf2docx_ir_html_test)
 
+    add_executable(pdf2docx_ir_html_only_page_test tests/unit/ir_html_only_page_test.cpp)
+    target_link_libraries(pdf2docx_ir_html_only_page_test PRIVATE pdf2docx::core)
+    add_test(NAME ir_html_only_page_test COMMAND pdf2docx_ir_html_only_page_test)
+
     add_executable(pdf2docx_ir_html_image_test tests/unit/ir_html_image_test.cpp)
     target_link_libraries(pdf2docx_ir_html_image_test PRIVATE pdf2docx::core)
     add_test(NAME ir_html_image_test COMMAND pdf2docx_ir_html_image_test)
+
+    add_executable(pdf2docx_ir_json_test tests/unit/ir_json_test.cpp)
+    target_link_libraries(pdf2docx_ir_json_test PRIVATE pdf2docx::core)
+    add_test(NAME ir_json_test COMMAND pdf2docx_ir_json_test)
 
     add_executable(pdf2docx_build_info_test tests/unit/build_info_test.cpp)
     target_link_libraries(pdf2docx_build_info_test PRIVATE pdf2docx::core)
@@ -140,10 +163,22 @@ if(PDF2DOCX_ENABLE_TESTS)
     target_include_directories(pdf2docx_docx_image_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
     add_test(NAME docx_image_test COMMAND pdf2docx_docx_image_test)
 
+    add_executable(pdf2docx_docx_anchor_test tests/unit/docx_anchor_test.cpp)
+    target_link_libraries(pdf2docx_docx_anchor_test PRIVATE pdf2docx::core)
+    target_include_directories(pdf2docx_docx_anchor_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    add_test(NAME docx_anchor_test COMMAND pdf2docx_docx_anchor_test)
+
     add_executable(pdf2docx_test_pdf_fixture_test tests/unit/test_pdf_fixture_test.cpp)
     target_link_libraries(pdf2docx_test_pdf_fixture_test PRIVATE pdf2docx::core)
     target_compile_definitions(pdf2docx_test_pdf_fixture_test PRIVATE PDF2DOCX_TEST_PDF_PATH="${PDF2DOCX_TEST_PDF}")
     add_test(NAME test_pdf_fixture_test COMMAND pdf2docx_test_pdf_fixture_test)
+
+    add_executable(pdf2docx_integration_e2e_test tests/integration/end_to_end_test.cpp)
+    target_link_libraries(pdf2docx_integration_e2e_test PRIVATE pdf2docx::core)
+    target_compile_definitions(pdf2docx_integration_e2e_test PRIVATE
+      PDF2DOCX_TEST_PDF_PATH="${PDF2DOCX_TEST_PDF}"
+      PDF2DOCX_TEST_IMAGE_TEXT_PDF_PATH="${PDF2DOCX_TEST_IMAGE_TEXT_PDF}")
+    add_test(NAME integration_e2e_test COMMAND pdf2docx_integration_e2e_test)
   endif()
 endif()
 

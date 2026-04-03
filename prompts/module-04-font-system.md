@@ -109,10 +109,22 @@ struct GlyphMetrics { double ascent_pt, descent_pt, advance_pt, line_gap_pt; };
 ## 9) 任务卡（给下一位 LLM）
 
 ## P1
-1. 保持现有 probe 稳定，不影响当前 11 项测试。
+1. 保持现有 probe 稳定，不影响当前测试（`16` 项）。
 2. 给 `ConvertStats` 增加字体 fallback 计数字段（占位可先为 0）。
 
 ## P2
 1. 引入 `FontResolver`（最小实现：alias + fallback）。
 2. 增加 `fonts.json` 读取与默认策略。
 3. 对接 pipeline（行高/段落合并）。
+
+---
+
+## 10) 最新进展（2026-04-03）
+
+已落地：
+1. `ProbeFreeType` 已支持输出 `FreeTypeProbeInfo`（版本号、模块能力）。
+2. 新增最小 `FontResolver`：
+   - alias 映射
+   - fallback family
+   - family->file_path 映射
+3. 已新增并接入 `font_resolver_test`，与现有 `freetype_test` 一并通过。

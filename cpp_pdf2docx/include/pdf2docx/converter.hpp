@@ -19,7 +19,8 @@ class Converter {
 
   Status ExtractIrFromFile(const std::string& input_pdf,
                            const ConvertOptions& options,
-                           ir::Document* document) const;
+                           ir::Document* document,
+                           ImageExtractionStats* image_stats = nullptr) const;
 
  private:
   BackendKind backend_;

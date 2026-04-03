@@ -35,7 +35,8 @@ Converter::Converter(BackendKind backend) : backend_(backend) {}
 
 Status Converter::ExtractIrFromFile(const std::string& input_pdf,
                                     const ConvertOptions& options,
-                                    ir::Document* document) const {
+                                    ir::Document* document,
+                                    ImageExtractionStats* image_stats) const {
   if (input_pdf.empty()) {
     return Status::Error(ErrorCode::kInvalidArgument, "input path must not be empty");
   }
@@ -55,7 +56,7 @@ Status Converter::ExtractIrFromFile(const std::string& input_pdf,
   }
 
   backend::PoDoFoBackend backend_impl;
-  return backend_impl.ExtractToIr(input_pdf, options, document);
+  return backend_impl.ExtractToIr(input_pdf, options, document, image_stats);
 }
 
 Status Converter::ConvertFile(const std::string& input_pdf,
@@ -69,13 +70,15 @@ Status Converter::ConvertFile(const std::string& input_pdf,
   const auto started = std::chrono::steady_clock::now();
 
   ir::Document ir_document;
-  Status extract_status = ExtractIrFromFile(input_pdf, options, &ir_document);
+  ImageExtractionStats image_extraction_stats;
+  Status extract_status = ExtractIrFromFile(input_pdf, options, &ir_document, &image_extraction_stats);
   if (!extract_status.ok()) {
     return extract_status;
   }
 
   pipeline::Pipeline pipeline;
-  Status pipeline_status = pipeline.Execute();
+  pipeline::PipelineStats pipeline_stats;
+  Status pipeline_status = pipeline.Execute(&ir_document, &pipeline_stats);
   if (!pipeline_status.ok()) {
     return pipeline_status;
   }
@@ -83,12 +86,21 @@ Status Converter::ConvertFile(const std::string& input_pdf,
   ConvertStats local_stats;
   local_stats.page_count = static_cast<uint32_t>(ir_document.pages.size());
   local_stats.image_count = CountImages(ir_document);
-  local_stats.warning_count = 0;
+  local_stats.warning_count = image_extraction_stats.warning_count;
+  local_stats.extracted_image_count = image_extraction_stats.extracted_count;
+  local_stats.skipped_image_count = image_extraction_stats.skipped_count;
+  local_stats.skipped_unsupported_filter_count = image_extraction_stats.skipped_unsupported_filter_count;
+  local_stats.skipped_empty_stream_count = image_extraction_stats.skipped_empty_stream_count;
+  local_stats.skipped_decode_failed_count = image_extraction_stats.skipped_decode_failed_count;
+  local_stats.font_probe_count = options.enable_font_fallback ? 1u : 0u;
+  local_stats.backend_warning_count = image_extraction_stats.warning_count;
   local_stats.backend = BackendToString(backend_);
   local_stats.xml_backend = PDF2DOCX_XML_BACKEND_STR;
 
   docx::P0Writer writer;
-  Status write_status = writer.WriteFromIr(ir_document, output_docx, local_stats);
+  docx::DocxWriteOptions write_options;
+  write_options.use_anchored_images = options.docx_use_anchored_images;
+  Status write_status = writer.WriteFromIr(ir_document, output_docx, local_stats, write_options);
   if (!write_status.ok()) {
     return write_status;
   }

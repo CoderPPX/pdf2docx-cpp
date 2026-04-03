@@ -33,6 +33,8 @@ struct DocxImageRef {
   std::vector<uint8_t> data;
   int64_t width_emu = 1;
   int64_t height_emu = 1;
+  int64_t x_emu = 0;
+  int64_t y_emu = 0;
 };
 
 int64_t PtToEmu(double pt) {
@@ -99,6 +101,9 @@ std::vector<DocxImageRef> CollectDocxImages(const ir::Document& ir_document) {
       ref.data = image.data;
       ref.width_emu = PtToEmu(std::max(1.0, image.width));
       ref.height_emu = PtToEmu(std::max(1.0, image.height));
+      ref.x_emu = PtToEmu(std::max(0.0, image.x));
+      const double top_pt = std::max(0.0, page.height_pt - image.y - image.height);
+      ref.y_emu = PtToEmu(top_pt);
       refs.push_back(std::move(ref));
       ++index;
     }
@@ -108,7 +113,160 @@ std::vector<DocxImageRef> CollectDocxImages(const ir::Document& ir_document) {
 }
 
 #if PDF2DOCX_HAS_TINYXML2
-std::string BuildDocumentXml(const ir::Document& ir_document, const std::vector<DocxImageRef>& images) {
+void AppendImageGraphic(tinyxml2::XMLDocument& document,
+                        tinyxml2::XMLElement* parent,
+                        const DocxImageRef& image,
+                        uint32_t drawing_id) {
+  auto* graphic = document.NewElement("a:graphic");
+  parent->InsertEndChild(graphic);
+
+  auto* graphic_data = document.NewElement("a:graphicData");
+  graphic_data->SetAttribute("uri", "http://schemas.openxmlformats.org/drawingml/2006/picture");
+  graphic->InsertEndChild(graphic_data);
+
+  auto* pic = document.NewElement("pic:pic");
+  graphic_data->InsertEndChild(pic);
+
+  auto* nv_pic_pr = document.NewElement("pic:nvPicPr");
+  pic->InsertEndChild(nv_pic_pr);
+
+  auto* c_nv_pr = document.NewElement("pic:cNvPr");
+  c_nv_pr->SetAttribute("id", "0");
+  c_nv_pr->SetAttribute("name", image.file_name.c_str());
+  nv_pic_pr->InsertEndChild(c_nv_pr);
+
+  auto* c_nv_pic_pr = document.NewElement("pic:cNvPicPr");
+  nv_pic_pr->InsertEndChild(c_nv_pic_pr);
+
+  auto* blip_fill = document.NewElement("pic:blipFill");
+  pic->InsertEndChild(blip_fill);
+
+  auto* blip = document.NewElement("a:blip");
+  blip->SetAttribute("r:embed", image.relationship_id.c_str());
+  blip_fill->InsertEndChild(blip);
+
+  auto* stretch = document.NewElement("a:stretch");
+  blip_fill->InsertEndChild(stretch);
+
+  auto* fill_rect = document.NewElement("a:fillRect");
+  stretch->InsertEndChild(fill_rect);
+
+  auto* sp_pr = document.NewElement("pic:spPr");
+  pic->InsertEndChild(sp_pr);
+
+  auto* xfrm = document.NewElement("a:xfrm");
+  sp_pr->InsertEndChild(xfrm);
+
+  auto* off = document.NewElement("a:off");
+  off->SetAttribute("x", "0");
+  off->SetAttribute("y", "0");
+  xfrm->InsertEndChild(off);
+
+  const std::string width_emu = std::to_string(image.width_emu);
+  const std::string height_emu = std::to_string(image.height_emu);
+  auto* ext = document.NewElement("a:ext");
+  ext->SetAttribute("cx", width_emu.c_str());
+  ext->SetAttribute("cy", height_emu.c_str());
+  xfrm->InsertEndChild(ext);
+
+  auto* prst_geom = document.NewElement("a:prstGeom");
+  prst_geom->SetAttribute("prst", "rect");
+  sp_pr->InsertEndChild(prst_geom);
+
+  auto* av_lst = document.NewElement("a:avLst");
+  prst_geom->InsertEndChild(av_lst);
+
+  (void)drawing_id;
+}
+
+void AppendImageDrawing(tinyxml2::XMLDocument& document,
+                        tinyxml2::XMLElement* run,
+                        const DocxImageRef& image,
+                        bool use_anchored_images,
+                        uint32_t* drawing_id) {
+  auto* drawing = document.NewElement("w:drawing");
+  run->InsertEndChild(drawing);
+
+  const std::string width_emu = std::to_string(image.width_emu);
+  const std::string height_emu = std::to_string(image.height_emu);
+  const std::string x_emu = std::to_string(image.x_emu);
+  const std::string y_emu = std::to_string(image.y_emu);
+  const std::string drawing_id_str = std::to_string(*drawing_id);
+  ++(*drawing_id);
+
+  if (use_anchored_images) {
+    auto* anchor = document.NewElement("wp:anchor");
+    anchor->SetAttribute("distT", "0");
+    anchor->SetAttribute("distB", "0");
+    anchor->SetAttribute("distL", "0");
+    anchor->SetAttribute("distR", "0");
+    anchor->SetAttribute("simplePos", "0");
+    anchor->SetAttribute("relativeHeight", "251659264");
+    anchor->SetAttribute("behindDoc", "0");
+    anchor->SetAttribute("locked", "0");
+    anchor->SetAttribute("layoutInCell", "1");
+    anchor->SetAttribute("allowOverlap", "1");
+    drawing->InsertEndChild(anchor);
+
+    auto* simple_pos = document.NewElement("wp:simplePos");
+    simple_pos->SetAttribute("x", "0");
+    simple_pos->SetAttribute("y", "0");
+    anchor->InsertEndChild(simple_pos);
+
+    auto* position_h = document.NewElement("wp:positionH");
+    position_h->SetAttribute("relativeFrom", "page");
+    auto* pos_h_offset = document.NewElement("wp:posOffset");
+    pos_h_offset->SetText(x_emu.c_str());
+    position_h->InsertEndChild(pos_h_offset);
+    anchor->InsertEndChild(position_h);
+
+    auto* position_v = document.NewElement("wp:positionV");
+    position_v->SetAttribute("relativeFrom", "page");
+    auto* pos_v_offset = document.NewElement("wp:posOffset");
+    pos_v_offset->SetText(y_emu.c_str());
+    position_v->InsertEndChild(pos_v_offset);
+    anchor->InsertEndChild(position_v);
+
+    auto* extent = document.NewElement("wp:extent");
+    extent->SetAttribute("cx", width_emu.c_str());
+    extent->SetAttribute("cy", height_emu.c_str());
+    anchor->InsertEndChild(extent);
+
+    auto* wrap_none = document.NewElement("wp:wrapNone");
+    anchor->InsertEndChild(wrap_none);
+
+    auto* doc_pr = document.NewElement("wp:docPr");
+    doc_pr->SetAttribute("id", drawing_id_str.c_str());
+    doc_pr->SetAttribute("name", image.file_name.c_str());
+    anchor->InsertEndChild(doc_pr);
+
+    AppendImageGraphic(document, anchor, image, *drawing_id);
+    return;
+  }
+
+  auto* inline_drawing = document.NewElement("wp:inline");
+  inline_drawing->SetAttribute("distT", "0");
+  inline_drawing->SetAttribute("distB", "0");
+  inline_drawing->SetAttribute("distL", "0");
+  inline_drawing->SetAttribute("distR", "0");
+  drawing->InsertEndChild(inline_drawing);
+
+  auto* extent = document.NewElement("wp:extent");
+  extent->SetAttribute("cx", width_emu.c_str());
+  extent->SetAttribute("cy", height_emu.c_str());
+  inline_drawing->InsertEndChild(extent);
+
+  auto* doc_pr = document.NewElement("wp:docPr");
+  doc_pr->SetAttribute("id", drawing_id_str.c_str());
+  doc_pr->SetAttribute("name", image.file_name.c_str());
+  inline_drawing->InsertEndChild(doc_pr);
+
+  AppendImageGraphic(document, inline_drawing, image, *drawing_id);
+}
+
+std::string BuildDocumentXml(const ir::Document& ir_document,
+                             const std::vector<DocxImageRef>& images,
+                             bool use_anchored_images) {
   tinyxml2::XMLDocument document;
   tinyxml2::XMLNode* declaration = document.NewDeclaration();
   document.InsertFirstChild(declaration);
@@ -156,85 +314,7 @@ std::string BuildDocumentXml(const ir::Document& ir_document, const std::vector<
       auto* run = document.NewElement("w:r");
       paragraph->InsertEndChild(run);
 
-      auto* drawing = document.NewElement("w:drawing");
-      run->InsertEndChild(drawing);
-
-      auto* inline_drawing = document.NewElement("wp:inline");
-      inline_drawing->SetAttribute("distT", "0");
-      inline_drawing->SetAttribute("distB", "0");
-      inline_drawing->SetAttribute("distL", "0");
-      inline_drawing->SetAttribute("distR", "0");
-      drawing->InsertEndChild(inline_drawing);
-
-      auto* extent = document.NewElement("wp:extent");
-      const std::string width_emu = std::to_string(image.width_emu);
-      const std::string height_emu = std::to_string(image.height_emu);
-      extent->SetAttribute("cx", width_emu.c_str());
-      extent->SetAttribute("cy", height_emu.c_str());
-      inline_drawing->InsertEndChild(extent);
-
-      auto* doc_pr = document.NewElement("wp:docPr");
-      const std::string drawing_id_str = std::to_string(drawing_id++);
-      doc_pr->SetAttribute("id", drawing_id_str.c_str());
-      doc_pr->SetAttribute("name", image.file_name.c_str());
-      inline_drawing->InsertEndChild(doc_pr);
-
-      auto* graphic = document.NewElement("a:graphic");
-      inline_drawing->InsertEndChild(graphic);
-
-      auto* graphic_data = document.NewElement("a:graphicData");
-      graphic_data->SetAttribute("uri", "http://schemas.openxmlformats.org/drawingml/2006/picture");
-      graphic->InsertEndChild(graphic_data);
-
-      auto* pic = document.NewElement("pic:pic");
-      graphic_data->InsertEndChild(pic);
-
-      auto* nv_pic_pr = document.NewElement("pic:nvPicPr");
-      pic->InsertEndChild(nv_pic_pr);
-
-      auto* c_nv_pr = document.NewElement("pic:cNvPr");
-      c_nv_pr->SetAttribute("id", "0");
-      c_nv_pr->SetAttribute("name", image.file_name.c_str());
-      nv_pic_pr->InsertEndChild(c_nv_pr);
-
-      auto* c_nv_pic_pr = document.NewElement("pic:cNvPicPr");
-      nv_pic_pr->InsertEndChild(c_nv_pic_pr);
-
-      auto* blip_fill = document.NewElement("pic:blipFill");
-      pic->InsertEndChild(blip_fill);
-
-      auto* blip = document.NewElement("a:blip");
-      blip->SetAttribute("r:embed", image.relationship_id.c_str());
-      blip_fill->InsertEndChild(blip);
-
-      auto* stretch = document.NewElement("a:stretch");
-      blip_fill->InsertEndChild(stretch);
-
-      auto* fill_rect = document.NewElement("a:fillRect");
-      stretch->InsertEndChild(fill_rect);
-
-      auto* sp_pr = document.NewElement("pic:spPr");
-      pic->InsertEndChild(sp_pr);
-
-      auto* xfrm = document.NewElement("a:xfrm");
-      sp_pr->InsertEndChild(xfrm);
-
-      auto* off = document.NewElement("a:off");
-      off->SetAttribute("x", "0");
-      off->SetAttribute("y", "0");
-      xfrm->InsertEndChild(off);
-
-      auto* ext = document.NewElement("a:ext");
-      ext->SetAttribute("cx", width_emu.c_str());
-      ext->SetAttribute("cy", height_emu.c_str());
-      xfrm->InsertEndChild(ext);
-
-      auto* prst_geom = document.NewElement("a:prstGeom");
-      prst_geom->SetAttribute("prst", "rect");
-      sp_pr->InsertEndChild(prst_geom);
-
-      auto* av_lst = document.NewElement("a:avLst");
-      prst_geom->InsertEndChild(av_lst);
+      AppendImageDrawing(document, run, image, use_anchored_images, &drawing_id);
 
       ++image_cursor;
     }
@@ -254,6 +334,21 @@ std::string BuildDocumentXml(const ir::Document& ir_document, const std::vector<
   tinyxml2::XMLPrinter printer;
   document.Print(&printer);
   return printer.CStr();
+}
+
+std::string BuildStylesXml() {
+  return R"(<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:docDefaults>
+    <w:rPrDefault>
+      <w:rPr>
+        <w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Calibri" w:cs="Calibri"/>
+        <w:sz w:val="22"/>
+        <w:szCs w:val="22"/>
+      </w:rPr>
+    </w:rPrDefault>
+  </w:docDefaults>
+</w:styles>)";
 }
 #endif
 
@@ -276,6 +371,8 @@ std::string BuildContentTypesXml(const std::vector<DocxImageRef>& images) {
   }
   stream << "  <Override PartName=\"/word/document.xml\" "
             "ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/>\n";
+  stream << "  <Override PartName=\"/word/styles.xml\" "
+            "ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml\"/>\n";
   stream << "</Types>";
   return stream.str();
 }
@@ -292,6 +389,9 @@ std::string BuildDocumentRelsXml(const std::vector<DocxImageRef>& images) {
   stream << R"(<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
 )";
+  stream << "  <Relationship Id=\"rIdStyles\" "
+            "Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" "
+            "Target=\"styles.xml\"/>\n";
   for (const auto& image : images) {
     stream << "  <Relationship Id=\"" << image.relationship_id
            << "\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" "
@@ -344,14 +444,16 @@ Status AddZipEntry(zipFile archive, const char* entry_name, const std::string& c
 
 Status P0Writer::WriteFromIr(const ir::Document& document,
                              const std::string& output_docx,
-                             const ConvertStats& stats) const {
+                             const ConvertStats& stats,
+                             const DocxWriteOptions& options) const {
   if (output_docx.empty()) {
     return Status::Error(ErrorCode::kInvalidArgument, "output docx path is empty");
   }
 
 #if PDF2DOCX_HAS_TINYXML2 && PDF2DOCX_HAS_MINIZIP
   const std::vector<DocxImageRef> docx_images = CollectDocxImages(document);
-  const std::string document_xml = BuildDocumentXml(document, docx_images);
+  const std::string document_xml = BuildDocumentXml(document, docx_images, options.use_anchored_images);
+  const std::string styles_xml = BuildStylesXml();
   const std::string content_types_xml = BuildContentTypesXml(docx_images);
   const std::string rels_xml = BuildRootRelsXml();
   const std::string document_rels_xml = BuildDocumentRelsXml(docx_images);
@@ -379,12 +481,16 @@ Status P0Writer::WriteFromIr(const ir::Document& document,
     return add_document_xml;
   }
 
-  if (!docx_images.empty()) {
-    Status add_document_rels = AddZipEntry(archive, "word/_rels/document.xml.rels", document_rels_xml);
-    if (!add_document_rels.ok()) {
-      zipClose(archive, nullptr);
-      return add_document_rels;
-    }
+  Status add_styles_xml = AddZipEntry(archive, "word/styles.xml", styles_xml);
+  if (!add_styles_xml.ok()) {
+    zipClose(archive, nullptr);
+    return add_styles_xml;
+  }
+
+  Status add_document_rels = AddZipEntry(archive, "word/_rels/document.xml.rels", document_rels_xml);
+  if (!add_document_rels.ok()) {
+    zipClose(archive, nullptr);
+    return add_document_rels;
   }
 
   for (const auto& image : docx_images) {

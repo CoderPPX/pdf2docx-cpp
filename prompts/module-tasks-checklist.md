@@ -17,7 +17,7 @@ cmake --build --preset linux-debug -j4
 ctest --preset linux-debug
 ```
 - 验收：
-  - `ctest` 全绿（当前基线 `11/11`）
+  - `ctest` 全绿（当前基线 `16/16`）
 
 ## TODO G-02：实跑三工具
 - 命令：
@@ -315,3 +315,21 @@ ctest --preset linux-debug
   - 三文件都存在
   - `final_ir.json` 含图片
   - `final.docx` 可打开
+
+---
+
+## 执行状态更新（2026-04-03）
+
+已完成项：
+1. `G-01`：完成，`ctest --preset linux-debug` 当前 `16/16` 通过。
+2. `G-02`：完成，三工具均可实跑并产生产物。
+3. `M01-01 ~ M01-03`：完成（依赖日志/严格依赖开关/Windows test preset）。
+4. `M02-01 ~ M02-02`：完成（图片提取统计 + FlateDecode 路径）。
+5. `M03-01 ~ M03-02`：完成（spans 排序 + pipeline 单测）。
+6. `M04-01 ~ M04-02`：完成（FreeType 探测扩展 + FontResolver）。
+7. `M05-01 ~ M05-03`：完成（ZIP 级媒体验证 + styles.xml + anchored 开关）。
+8. `M06-01 ~ M06-02`：完成（`--dump-ir` + `--no-images`）。
+9. `M07-01 ~ M07-02`：完成（integration 用例 + CI workflow 草案）。
+10. `M08-01 ~ M08-02`：完成（图片 quad + warning 统计映射）。
+11. `M09-01 ~ M09-02`：完成（`pdf2ir summary` + `ir2html --only-page`）。
+12. `FINAL-01 ~ FINAL-03`：完成（完整回归 + 文档更新 + 产物抽检）。

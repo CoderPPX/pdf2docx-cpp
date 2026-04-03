@@ -28,7 +28,7 @@
 4. 目标结构：
    - 核心库：`pdf2docx_core`
    - CLI：`pdf2docx`、`ir2html`、`pdf2ir`
-   - CTest 单元测试：11 项
+   - CTest 单元/集成测试：16 项
 5. 安装导出：
    - `install(TARGETS ...)`
    - `install(EXPORT pdf2docxTargets ...)`
@@ -144,3 +144,16 @@ ctest --preset linux-debug
 2. 再改构建：
    - 仅改 `CMakeLists.txt` / `cmake/Dependencies.cmake` / `CMakePresets.json`
 3. 每改一轮都回归 `configure + build + ctest`。
+
+---
+
+## 10) 最新进展（2026-04-03）
+
+已完成本模块 P1 的三项落地：
+1. 依赖解析日志升级为“来源 + target + version”三元信息（`Dependencies.cmake`）。
+2. 新增严格依赖开关 `PDF2DOCX_STRICT_DEPS`，可在依赖缺失时 fail-fast。
+3. `CMakePresets.json` 补齐 Windows Debug 测试 preset：
+   - `windows-msvc-debug`
+   - `windows-mingw-debug`
+
+最新 Linux 验证结果：`ctest --preset linux-debug` 通过（`16/16`）。

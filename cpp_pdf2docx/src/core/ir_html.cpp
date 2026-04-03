@@ -92,11 +92,22 @@ Status WriteIrToHtml(const ir::Document& document,
   if (options.scale <= 0.0) {
     return Status::Error(ErrorCode::kInvalidArgument, "html scale must be > 0");
   }
+  if (options.only_page > document.pages.size()) {
+    return Status::Error(ErrorCode::kInvalidArgument, "requested only_page is out of range");
+  }
 
   std::ofstream stream(output_html, std::ios::out | std::ios::trunc);
   if (!stream.is_open()) {
     return Status::Error(ErrorCode::kIoError, "cannot open output html");
   }
+
+  size_t render_start = 0;
+  size_t render_end = document.pages.size();
+  if (options.only_page > 0) {
+    render_start = options.only_page - 1;
+    render_end = render_start + 1;
+  }
+  const size_t rendered_pages = render_end - render_start;
 
   stream << std::fixed << std::setprecision(2);
   stream << "<!doctype html>\n";
@@ -112,12 +123,19 @@ Status WriteIrToHtml(const ir::Document& document,
             ".span.debug{outline:1px dashed rgba(0,128,255,0.35);}"
             ".image{position:absolute;object-fit:contain;}"
             ".image.debug{outline:1px dashed rgba(255,0,128,0.35);}"
+            ".overlay{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;}"
+            ".quad{fill:none;stroke:rgba(255,80,0,0.55);stroke-width:1.2;}"
             ".empty{position:absolute;left:10px;top:10px;color:#999;font-style:italic;}"
             "</style>\n";
   stream << "</head><body>\n";
-  stream << "<div class=\"meta\">scale=" << options.scale << ", pages=" << document.pages.size() << "</div>\n";
+  stream << "<div class=\"meta\">scale=" << options.scale
+         << ", pages=" << rendered_pages << "/" << document.pages.size();
+  if (options.only_page > 0) {
+    stream << ", only_page=" << options.only_page;
+  }
+  stream << "</div>\n";
 
-  for (size_t page_index = 0; page_index < document.pages.size(); ++page_index) {
+  for (size_t page_index = render_start; page_index < render_end; ++page_index) {
     const auto& page = document.pages[page_index];
     const double canvas_width = std::max(1.0, page.width_pt * options.scale);
     const double canvas_height = std::max(1.0, page.height_pt * options.scale);
@@ -165,6 +183,8 @@ Status WriteIrToHtml(const ir::Document& document,
              << HtmlEscape(span.text) << "</div>\n";
     }
 
+    std::vector<std::string> image_quad_points;
+    image_quad_points.reserve(page.images.size());
     for (const auto& image : page.images) {
       if (image.data.empty()) {
         continue;
@@ -187,6 +207,32 @@ Status WriteIrToHtml(const ir::Document& document,
              << "style=\"left:" << css_left << "px;top:" << css_top << "px;"
              << "width:" << css_width << "px;height:" << css_height << "px\" "
              << "src=\"data:" << mime_type << ";base64," << Base64Encode(image.data) << "\"/>\n";
+
+      if (options.show_boxes && image.has_quad) {
+        const double q0x = image.quad.p0.x * options.scale;
+        const double q0y = (page.height_pt - image.quad.p0.y) * options.scale;
+        const double q1x = image.quad.p1.x * options.scale;
+        const double q1y = (page.height_pt - image.quad.p1.y) * options.scale;
+        const double q2x = image.quad.p2.x * options.scale;
+        const double q2y = (page.height_pt - image.quad.p2.y) * options.scale;
+        const double q3x = image.quad.p3.x * options.scale;
+        const double q3y = (page.height_pt - image.quad.p3.y) * options.scale;
+
+        std::ostringstream points;
+        points << q0x << "," << q0y << " "
+               << q1x << "," << q1y << " "
+               << q3x << "," << q3y << " "
+               << q2x << "," << q2y;
+        image_quad_points.push_back(points.str());
+      }
+    }
+
+    if (options.show_boxes && !image_quad_points.empty()) {
+      stream << "<svg class=\"overlay\" viewBox=\"0 0 " << canvas_width << " " << canvas_height << "\">\n";
+      for (const auto& points : image_quad_points) {
+        stream << "<polygon class=\"quad\" points=\"" << points << "\"/>\n";
+      }
+      stream << "</svg>\n";
     }
     stream << "</div></div>\n";
   }

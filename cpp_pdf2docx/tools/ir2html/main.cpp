@@ -1,4 +1,5 @@
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -7,7 +8,7 @@
 
 int main(int argc, char** argv) {
   if (argc < 3) {
-    std::cerr << "Usage: ir2html <input.pdf> <output.html> [--scale 1.25] [--hide-boxes]\n";
+    std::cerr << "Usage: ir2html <input.pdf> <output.html> [--scale 1.25] [--hide-boxes] [--only-page N]\n";
     return 1;
   }
 
@@ -34,6 +35,24 @@ int main(int argc, char** argv) {
       html_options.show_boxes = false;
       continue;
     }
+    if (arg == "--only-page") {
+      if (i + 1 >= argc) {
+        std::cerr << "--only-page requires a page number\n";
+        return 1;
+      }
+      try {
+        const unsigned long value = std::stoul(argv[++i]);
+        if (value > std::numeric_limits<uint32_t>::max()) {
+          std::cerr << "invalid --only-page value\n";
+          return 1;
+        }
+        html_options.only_page = static_cast<uint32_t>(value);
+      } catch (const std::exception&) {
+        std::cerr << "invalid --only-page value\n";
+        return 1;
+      }
+      continue;
+    }
     std::cerr << "Unknown argument: " << arg << "\n";
     return 1;
   }
@@ -57,6 +76,7 @@ int main(int argc, char** argv) {
   std::cout << "IR to HTML done. pages=" << document.pages.size()
             << " scale=" << html_options.scale
             << " boxes=" << (html_options.show_boxes ? "on" : "off")
+            << " only_page=" << html_options.only_page
             << "\n";
   return 0;
 }

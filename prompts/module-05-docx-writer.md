@@ -1,11 +1,13 @@
-# 模块 05：DOCX 写出（tinyxml2 + minizip-ng）详细设计
+# 模块 05：DOCX 写出（tinyxml2 + minizip-ng）
 
 ## 1) 模块定位
 
-本模块把 `ir::Document` 写出为最小合法 `.docx`，当前已支持：
-- 文本段落
-- 页面分隔符
-- 图片媒体与最小 drawing 引用
+本模块负责将 `ir::Document` 写成最小可读 `.docx`，当前已支持：
+1. 文本段落写出。
+2. 页面分页符写出。
+3. 图片媒体写出与关系绑定。
+4. inline 与 anchored 两种图片 drawing 路径（开关控制）。
+5. 最小 `styles.xml` 写出。
 
 核心文件：
 - `cpp_pdf2docx/src/docx/p0_writer.hpp`
@@ -13,141 +15,130 @@
 
 ---
 
-## 2) 当前接口与输入输出
+## 2) 当前接口（真实）
 
 ```cpp
+struct DocxWriteOptions {
+  bool use_anchored_images = false;
+};
+
 class P0Writer {
  public:
   Status WriteFromIr(const ir::Document& document,
                      const std::string& output_docx,
-                     const ConvertStats& stats) const;
+                     const ConvertStats& stats,
+                     const DocxWriteOptions& options = {}) const;
 };
 ```
 
-输入：
-- `ir::Document`
-- `output_docx`
-- `ConvertStats`（当前主要用于降级文本输出）
-
-输出：
-- 成功：合法 `.docx` 文件
-- 失败：`Status::Error(...)`
+说明：
+- 默认 `use_anchored_images=false`，兼容原 `wp:inline`。
+- `Converter` 会把 `ConvertOptions.docx_use_anchored_images` 传入 writer。
 
 ---
 
-## 3) 当前 DOCX 结构（已实现）
+## 3) 当前 DOCX part 结构
 
-固定写入 part：
+固定写入：
 1. `[Content_Types].xml`
 2. `_rels/.rels`
 3. `word/document.xml`
-4. `word/_rels/document.xml.rels`（有图片时）
-5. `word/media/imageN.ext`（每张图片）
+4. `word/styles.xml`
+5. `word/_rels/document.xml.rels`
+6. `word/media/imageN.ext`（有图时）
 
 ---
 
-## 4) 文本映射规则（现状）
+## 4) 文本与分页映射
 
-1. 每个 `TextSpan` -> 一个 `w:p/w:r/w:t`
-2. 每页末尾追加一个分页段落：
-   - `w:br w:type="page"`
-3. 目前不做 run 合并、样式抽取、段落级语义映射
-
----
-
-## 5) 图片映射规则（现状）
-
-## 5.1 图片收集
-- 从 `ir::Page.images` 顺序遍历
-- 生成：
-  - `relationship_id = rIdN`
-  - `file_name = imageN.ext`
-  - `part_name = word/media/imageN.ext`
-
-## 5.2 MIME 与扩展名
-- 优先使用 IR 携带值
-- 扩展名标准化（去 `.`、转小写）
-- 未给 mime 时按扩展名推断
-
-## 5.3 尺寸换算
-- `pt -> emu`：`1pt = 12700 emu`
-- 写入 `wp:extent cx/cy`
-
-## 5.4 document.xml 中图片节点
-- 当前写最小 `w:drawing/wp:inline` 结构
-- `a:blip r:embed="rIdN"` 引用关系
-
-## 5.5 document.xml.rels
-- 每图一条：
-  - `Type=image`
-  - `Target=media/imageN.ext`
+1. 每个 `TextSpan` -> 一个 `w:p/w:r/w:t`。
+2. 每页末尾追加 `w:br w:type="page"`。
+3. 仍未做 run 合并与语义段落建模（由后续 pipeline 负责）。
 
 ---
 
-## 6) ZIP 写入实现细节
+## 5) 图片映射
 
-使用 `minizip` compat API：
+## 5.1 媒体收集
+- 读取 `ir::Page.images`。
+- 生成 `rIdN`、`word/media/imageN.ext`。
+- `pt -> emu`：`1pt = 12700 emu`。
+
+## 5.2 inline 路径（默认）
+- `w:drawing/wp:inline`。
+- `wp:extent` 写尺寸。
+- `a:blip r:embed="rIdN"` 绑定关系。
+
+## 5.3 anchored 路径（可选）
+- `w:drawing/wp:anchor`。
+- 写 `wp:positionH/wp:positionV`（相对 page）。
+- 当前是基于 IR 坐标的近似定位实现，非最终高保真布局。
+
+---
+
+## 6) styles.xml（当前）
+
+已输出最小样式模板：
+- `w:docDefaults`
+- 默认字体 `Calibri`
+- 默认字号 `w:sz=22`
+
+并在：
+- `[Content_Types].xml` 增加 `styles.xml` override；
+- `word/_rels/document.xml.rels` 增加 styles relationship（`rIdStyles`）。
+
+---
+
+## 7) ZIP 写出实现
+
+使用 minizip compat API：
 - `zipOpen64`
 - `zipOpenNewFileInZip`
 - `zipWriteInFileInZip`
 - `zipCloseFileInZip`
 - `zipClose`
 
-当前封装：
-- `AddZipEntry(zipFile, entry, std::string)`
-- `AddZipEntry(zipFile, entry, void*, size_t)`（二进制）
-
----
-
-## 7) 降级路径（无 tinyxml2 或无 minizip）
-
-当 `PDF2DOCX_HAS_TINYXML2 && PDF2DOCX_HAS_MINIZIP` 不满足：
-- 写出占位文本文件（不是 docx zip）
-- 包含基础统计字段与说明
-
-备注：
-- `writer_test`/`converter_test` 已按宏区分断言
+内部封装：
+- `AddZipEntry(zipFile, const std::string&)`
+- `AddZipEntry(zipFile, const void*, size_t)`
 
 ---
 
 ## 8) 测试覆盖（当前）
 
 1. `tests/unit/writer_test.cpp`
-   - 核验产物存在
-   - 核验 zip 魔数/降级首字符
+   - 核验产物存在与容器合法性。
 2. `tests/unit/docx_image_test.cpp`
-   - 构造含图片 IR
-   - 断言 docx 内含 `word/media/image1.jpg` 与 `word/_rels/document.xml.rels`
-3. `tests/unit/converter_test.cpp`
-   - 端到端转换并核验 `stats.image_count`
+   - 通过 ZIP 目录解析验证 `word/media/*` 与 `word/styles.xml`。
+3. `tests/unit/docx_anchor_test.cpp`
+   - 解压 `word/document.xml` 并断言 `<wp:anchor>` 等锚定节点。
+4. `tests/integration/end_to_end_test.cpp`
+   - 端到端验证含图 PDF 写出结果。
 
 ---
 
 ## 9) 已知限制
 
-1. 图片当前按文档流插入，不是按 PDF 绝对坐标锚定
-2. 未输出 `styles.xml`/`numbering.xml`
-3. 未覆盖复杂 run 样式（加粗、字体等）
-4. `document.xml` 里图片与文本可能顺序正确但位置不高保真
+1. anchored 仍是近似映射，复杂旋转/裁剪场景未精确覆盖。
+2. 样式体系仍是最小模板（无 numbering/theme/header/footer）。
+3. 文字布局仍依赖基础 span 顺序，未完成语义段落重建。
 
 ---
 
-## 10) 后续详细任务卡
+## 10) 后续任务
 
-## P1（推荐先做）
-1. 新增 `styles.xml` 最小模板，给文本 run 加基本字体/字号。
-2. 增加 docx unzip 级别测试（实际读取 central directory，而非 `strings`）。
-3. `pdf2docx` CLI 增加 `--docx-minimal` / `--docx-anchored` 模式开关（anchored 先占位）。
+## P1（优先）
+1. anchored 精度提升（旋转、叠放、环绕策略）。
+2. 样式复用与段落样式抽象，减少 XML 冗余。
 
-## P2（质量提升）
-1. 实现 anchored drawing（按坐标布局）。
-2. 处理图片旋转/裁剪到 Word 变换模型。
-3. 引入段落/样式复用，减少 XML 体积。
+## P2
+1. 增加 `numbering.xml`、页眉页脚等 part。
+2. 增加 Office 版本兼容性抽检矩阵。
 
 ---
 
-## 11) 验收标准
+## 11) 最新验证（2026-04-03）
 
-1. 现有样本 DOCX 在 Word/LibreOffice 可打开。
-2. 增加新能力后，现有 11 项测试不回归。
-3. 对 `build/test.pdf`，`word/media/` 文件数与 IR 图片计数一致。
+- `ctest --preset linux-debug`：`16/16` 通过。
+- `test-image-text.pdf` 实跑产物：
+  - `final_image_text.docx` 可生成，且图片与样式 part 存在。

@@ -162,4 +162,14 @@ ID 规则：
 
 1. `build/test.pdf` 维持可抽图（当前 7 页多图）。
 2. `converter_test` 中 `stats.image_count > 0` 继续通过。
-3. 新增格式支持后，不破坏现有 11 项测试稳定性。
+3. 新增格式支持后，不破坏现有测试稳定性（当前 `16` 项）。
+
+---
+
+## 11) 最新进展（2026-04-03）
+
+已落地：
+1. `ExtractToIr(...)` 支持输出 `ImageExtractionStats`（成功数、跳过数、跳过原因、warning）。
+2. 图片导出新增 `FlateDecode -> PNG` 路径（RGBA 解码后封装 PNG）。
+3. 单图 decode 异常不再中断整份文档，改为“单图跳过并计数”。
+4. `ConvertStats` 已接入后端统计映射（`warning_count`/skip reason 细分）。

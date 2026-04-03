@@ -1,84 +1,106 @@
-# 模块 08：图片链路专项设计（PDF 图片 -> IR -> HTML/DOCX）
+# 模块 08：图片链路专项（PDF 图片 -> IR -> HTML/DOCX）
 
 ## 1) 模块定位
 
-这是一个跨模块专项文档，专门描述“图片转换链路”，用于后续继续增强图片质量时快速定位。
+该专项跨后端、IR、可视化和 DOCX 写出，目标是让图片在链路中可提取、可观测、可写出。
 
 涉及文件：
-- 后端抽图：`src/backend/podofo/podofo_backend.cpp`
-- IR 结构：`include/pdf2docx/ir.hpp`
-- HTML 渲染：`src/core/ir_html.cpp`
-- DOCX 写出：`src/docx/p0_writer.cpp`
-- 测试：`tests/unit/ir_html_image_test.cpp`、`tests/unit/docx_image_test.cpp`
+- `cpp_pdf2docx/src/backend/podofo/podofo_backend.cpp`
+- `cpp_pdf2docx/include/pdf2docx/ir.hpp`
+- `cpp_pdf2docx/src/core/ir_html.cpp`
+- `cpp_pdf2docx/src/docx/p0_writer.cpp`
+- `cpp_pdf2docx/include/pdf2docx/types.hpp`
 
 ---
 
-## 2) 端到端数据流
+## 2) 当前数据流
 
-1. PoDoFo 内容流遍历命中图片 XObject
-2. 抽取编码字节 + 位置尺寸 -> `ir::ImageBlock`
-3. `ir::Document` 进入下游：
-   - HTML：base64 内嵌 `<img>`
-   - DOCX：写 media part + drawing rel
+1. PoDoFo 内容流扫描命中图片 XObject。
+2. 提取图片编码字节与几何信息，写入 `ir::ImageBlock`。
+3. `ir2html`：base64 `<img>` 预览 + quad overlay（debug）。
+4. `pdf2docx`：写入 `word/media/*` 并在 `document.xml` 引用。
 
 ---
 
-## 3) 当前支持矩阵
+## 3) 当前格式与统计支持
 
 ## 3.1 图片格式
 - 已支持：
   - `DCTDecode`（JPEG）
   - `JPXDecode`（JP2）
-- 未覆盖：
-  - `FlateDecode` 直接可视导出
-  - `JBIG2Decode` 等更复杂格式
+  - `FlateDecode`（decode 后转 PNG）
+- 未完全覆盖：
+  - `JBIG2Decode` 等复杂格式
 
-## 3.2 坐标
-- 后端：PDF 坐标系（左下）
-- HTML：转换为左上原点
-- DOCX：当前仅 inline 尺寸，未做绝对锚定
-
----
-
-## 4) 关键算法细节（当前）
-
-1. 图形状态：
-   - `q/Q/cm` 跟踪 matrix
-2. Form 递归：
-   - `BeginFormXObject` 入栈
-   - `EndFormXObject` 恢复
-3. 图片几何：
-   - 用单位矩形四角经 CTM 变换
-   - 取 AABB 作为 bbox
-4. 二进制：
-   - `GetCopySafe()` 获取可写入字节
+## 3.2 统计字段
+- `ImageExtractionStats`：
+  - `extracted_count`
+  - `skipped_count`
+  - `skipped_unsupported_filter_count`
+  - `skipped_empty_stream_count`
+  - `skipped_decode_failed_count`
+  - `warning_count`
+- 映射到 `ConvertStats`：
+  - `warning_count`
+  - `backend_warning_count`
+  - 各类 `skipped_*` 计数
 
 ---
 
-## 5) 已知问题
+## 4) 几何表示（当前）
 
-1. `ICCBased` 颜色空间 warning（不阻塞当前 JPEG）
-2. 旋转图在 AABB 下存在视觉偏差
-3. DOCX 中图片位置偏“流式”而非“页面定位”
+`ImageBlock` 同时保存：
+1. AABB：`x/y/width/height`
+2. 四角点：`has_quad + quad(p0,p1,p2,p3)`
+
+用途：
+- AABB：兼容既有渲染/写出路径。
+- quad：用于旋转/错切调试与后续 anchored 精度提升。
 
 ---
 
-## 6) 优先改进路线
+## 5) 可观测性
+
+1. `ir2html` 在 debug 模式下可绘制图片 quad polygon。
+2. `pdf2docx` 输出统计可见 `images/skipped_images/warnings`。
+3. `pdf2ir` JSON 可见每页 `image_count` 与图片 `data_size`。
+
+---
+
+## 6) 测试覆盖
+
+1. `tests/unit/ir_html_image_test.cpp`
+   - 图片渲染与 quad overlay 标记。
+2. `tests/unit/test_pdf_fixture_test.cpp`
+   - fixture 至少存在一张 `has_quad` 图片。
+3. `tests/unit/converter_test.cpp`
+   - 图片计数与 skip reason 统计一致性。
+4. `tests/integration/end_to_end_test.cpp`
+   - 图文 PDF 端到端写出验证。
+
+---
+
+## 7) 已知限制
+
+1. `ICCBased` 颜色空间仍可能产生 warning。
+2. DOCX anchored 当前仍为近似布局，并非严格图形变换映射。
+3. 复杂滤镜/颜色空间尚未全部覆盖。
+
+---
+
+## 8) 后续任务
 
 ## P1
-1. `FlateDecode -> PNG` 导出支持
-2. `ConvertStats` 增加图片跳过原因统计
-3. `pdf2ir` 输出每页图片提取统计
+1. 扩展更多图像滤镜与颜色空间支持。
+2. 把 quad 更深入用于 DOCX 锚定定位计算。
 
 ## P2
-1. DOCX anchored 定位（坐标驱动）
-2. 保留图像四角点并输出到 IR（替代仅 AABB）
-3. 对颜色空间兼容做更稳妥处理
+1. 增加图片链路专用样本集与 golden 统计。
+2. 提供更细阶段耗时（抽图/编码/写出）。
 
 ---
 
-## 7) 验收建议
+## 9) 最新验证（2026-04-03）
 
-1. 对同一 PDF，IR 图片计数 = DOCX media 文件数
-2. HTML 预览中图片数量与 IR 一致
-3. 新增格式支持后，现有图片测试全部通过
+- `ctest --preset linux-debug`：`16/16` 通过。
+- `test-image-text.pdf` 实跑：`images=2 skipped_images=5 warnings=5`。

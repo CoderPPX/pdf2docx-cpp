@@ -13,6 +13,18 @@ struct Rect {
   double height = 0.0;
 };
 
+struct Point {
+  double x = 0.0;
+  double y = 0.0;
+};
+
+struct Quad {
+  Point p0{};
+  Point p1{};
+  Point p2{};
+  Point p3{};
+};
+
 struct TextSpan {
   std::string text;
   double x = 0.0;
@@ -30,6 +42,8 @@ struct ImageBlock {
   double y = 0.0;
   double width = 0.0;
   double height = 0.0;
+  bool has_quad = false;
+  Quad quad{};
   std::vector<uint8_t> data;
 };
 

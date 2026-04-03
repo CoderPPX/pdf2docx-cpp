@@ -152,6 +152,16 @@ class Pipeline {
 
 ## 10) 验收标准
 
-1. 加入 Stage 后，现有 11 项测试不回归。
+1. 加入 Stage 后，现有测试不回归（当前 `16` 项）。
 2. `build/test.pdf` 导出的文本顺序比基线更稳定（人工 spot check）。
 3. `pdf2ir` 输出可用于 LLM 调试和比对。
+
+---
+
+## 11) 最新进展（2026-04-03）
+
+已落地：
+1. `Pipeline::Execute()` 从占位改为真实执行，接口升级为 `Execute(ir::Document*, PipelineStats*)`。
+2. 启用了最小 `SortSpansStage` 逻辑（页内先 y 后 x，稳定排序）。
+3. 新增 `PipelineStats` 并在 `converter` 调用链中接入。
+4. `pipeline_test` 已扩展为排序行为断言，当前回归通过。

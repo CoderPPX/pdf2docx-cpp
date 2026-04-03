@@ -15,7 +15,8 @@ class PoDoFoBackend {
   Status Open(const std::string& pdf_path) const;
   Status ExtractToIr(const std::string& pdf_path,
                      const ConvertOptions& options,
-                     ir::Document* out_document) const;
+                     ir::Document* out_document,
+                     ImageExtractionStats* image_stats = nullptr) const;
 
  private:
   Status ValidatePdfHeader(const std::string& pdf_path) const;

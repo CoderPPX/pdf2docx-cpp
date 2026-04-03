@@ -20,6 +20,13 @@ int main() {
   image.y = 20.0;
   image.width = 50.0;
   image.height = 30.0;
+  image.has_quad = true;
+  image.quad = pdf2docx::ir::Quad{
+      .p0 = pdf2docx::ir::Point{10.0, 20.0},
+      .p1 = pdf2docx::ir::Point{60.0, 20.0},
+      .p2 = pdf2docx::ir::Point{10.0, 50.0},
+      .p3 = pdf2docx::ir::Point{60.0, 50.0},
+  };
   image.data = {0xFF, 0xD8, 0xFF, 0xD9};
   page.images.push_back(std::move(image));
 
@@ -41,6 +48,9 @@ int main() {
     return EXIT_FAILURE;
   }
   if (html.find("data:image/jpeg;base64,/9j/2Q==") == std::string::npos) {
+    return EXIT_FAILURE;
+  }
+  if (html.find("class=\"quad\"") == std::string::npos) {
     return EXIT_FAILURE;
   }
 

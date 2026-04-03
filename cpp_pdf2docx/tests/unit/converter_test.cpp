@@ -40,6 +40,12 @@ int main() {
   if (stats.image_count == 0) {
     return EXIT_FAILURE;
   }
+  if (stats.extracted_image_count != stats.image_count) {
+    return EXIT_FAILURE;
+  }
+  if (stats.backend_warning_count != stats.warning_count) {
+    return EXIT_FAILURE;
+  }
 
   std::ifstream stream(output_docx, std::ios::binary);
   if (!stream.is_open()) {
@@ -60,6 +66,25 @@ int main() {
     return EXIT_FAILURE;
   }
 #endif
+
+  const std::filesystem::path input_image_text_pdf = PDF2DOCX_TEST_IMAGE_TEXT_PDF_PATH;
+  if (std::filesystem::exists(input_image_text_pdf)) {
+    const std::filesystem::path image_text_docx = tmp_dir / "image_text_output.docx";
+    pdf2docx::ConvertStats image_text_stats;
+    status = converter.ConvertFile(input_image_text_pdf.string(), image_text_docx.string(), options, &image_text_stats);
+    if (!status.ok()) {
+      return EXIT_FAILURE;
+    }
+    if (!std::filesystem::exists(image_text_docx)) {
+      return EXIT_FAILURE;
+    }
+    if (image_text_stats.extracted_image_count != image_text_stats.image_count) {
+      return EXIT_FAILURE;
+    }
+    if (image_text_stats.warning_count < image_text_stats.skipped_image_count) {
+      return EXIT_FAILURE;
+    }
+  }
 
   return EXIT_SUCCESS;
 }

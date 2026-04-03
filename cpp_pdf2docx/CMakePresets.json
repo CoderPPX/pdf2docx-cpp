@@ -13,6 +13,7 @@
       "cacheVariables": {
         "PDF2DOCX_USE_BUNDLED_DEPS": "ON",
         "PDF2DOCX_ADD_SUBDIR_DEPS": "ON",
+        "PDF2DOCX_STRICT_DEPS": "OFF",
         "PDF2DOCX_ENABLE_TESTS": "ON",
         "PDF2DOCX_ENABLE_CLI": "ON",
         "PDF2DOCX_PDF_BACKEND": "podofo",
@@ -138,6 +139,21 @@
       "name": "windows-msvc-release",
       "configurePreset": "windows-msvc-release",
       "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-msvc-debug",
+      "configurePreset": "windows-msvc-debug",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-mingw-debug",
+      "configurePreset": "windows-mingw-debug",
       "output": {
         "outputOnFailure": true
       }

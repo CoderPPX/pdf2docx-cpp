@@ -25,10 +25,19 @@ int main() {
   }
 
   size_t image_count = 0;
+  bool has_image_quad = false;
   for (const auto& page : document.pages) {
     image_count += page.images.size();
+    for (const auto& image : page.images) {
+      if (image.has_quad) {
+        has_image_quad = true;
+      }
+    }
   }
   if (image_count == 0) {
+    return EXIT_FAILURE;
+  }
+  if (!has_image_quad) {
     return EXIT_FAILURE;
   }
 
