@@ -57,5 +57,28 @@ web_pdftools/
 2. `node --check preload.js`
 3. `node --check renderer.mjs`
 4. `npm run lint:node`
+5. `npm run test:unit`（wasm worker 单元测试）
 
 说明：当前环境未启动 GUI 窗口做端到端点击测试；需要本地桌面环境执行 `npm start` 验证。
+
+## 6. WASM Worker（新增）
+
+目录：
+
+```text
+web_pdftools/wasm/
+  worker_protocol.mjs
+  pdftools_wasm_backend.mjs
+  worker_dispatcher.mjs
+  pdftools.worker.mjs        # 浏览器/Electron renderer worker 入口
+  pdftools.node_worker.mjs   # Node 单元测试 worker 入口
+  pdftools_worker_client.mjs # 主线程 Promise client
+```
+
+说明：
+
+1. Worker 协议支持 `init / run / ping / shutdown`。
+2. 默认 wasm backend 约定导出 C ABI：
+   - `pdftools_wasm_op`（或 `_pdftools_wasm_op`）
+   - `pdftools_wasm_free`（或 `_pdftools_wasm_free`）
+3. 当前测试使用 mock backend 验证 worker 协议、超时和错误映射。

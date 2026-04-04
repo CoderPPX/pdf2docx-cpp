@@ -81,6 +81,7 @@ endif()
 
 add_library(pdftools_core STATIC
   src/core/status.cpp
+  src/core/error_handling.cpp
   src/runtime/command_registry.cpp
   src/runtime/task_runner.cpp
   src/pdf/document_ops.cpp
@@ -194,6 +195,10 @@ if(PDFTOOLS_ENABLE_TESTS)
     add_executable(pdftools_m6_task_runner_test tests/unit/m6_task_runner_test.cpp)
     target_link_libraries(pdftools_m6_task_runner_test PRIVATE pdftools::core)
     add_test(NAME pdftools_m6_task_runner_test COMMAND pdftools_m6_task_runner_test)
+
+    add_executable(pdftools_m7_error_handling_test tests/unit/m7_error_handling_test.cpp)
+    target_link_libraries(pdftools_m7_error_handling_test PRIVATE pdftools::core)
+    add_test(NAME pdftools_m7_error_handling_test COMMAND pdftools_m7_error_handling_test)
   endif()
 endif()
 

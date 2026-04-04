@@ -79,6 +79,19 @@ function buildNativeMenu(initialWindow) {
         }
       },
       { type: 'separator' },
+      {
+        label: 'Settings',
+        submenu: [
+          {
+            label: 'Theme Settings',
+            accelerator: 'CmdOrCtrl+,',
+            click: () => {
+              sendMenuAction(targetWindow(), 'open-theme-settings');
+            }
+          }
+        ]
+      },
+      { type: 'separator' },
       isMac ? { role: 'close' } : { role: 'quit' }
     ]
   });

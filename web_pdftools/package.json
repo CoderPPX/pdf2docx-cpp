@@ -6,7 +6,9 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "lint:node": "node --check main.js && node --check preload.js && node --check renderer.mjs"
+    "lint:node": "node --check main.js && node --check preload.js && node --check renderer.mjs && node --check wasm/worker_protocol.mjs && node --check wasm/pdftools_wasm_backend.mjs && node --check wasm/worker_dispatcher.mjs && node --check wasm/pdftools.worker.mjs && node --check wasm/pdftools.node_worker.mjs && node --check wasm/pdftools_worker_client.mjs && node --check tests/wasm_worker_dispatcher.test.mjs && node --check tests/pdftools_worker_client.test.mjs && node --check tests/worker_protocol.test.mjs",
+    "test:unit": "node --test tests/*.test.mjs",
+    "test": "npm run test:unit"
   },
   "dependencies": {
     "pdfjs-dist": "^5.4.394"

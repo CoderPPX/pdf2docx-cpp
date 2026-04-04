@@ -10,6 +10,8 @@
 
 #include <podofo/podofo.h>
 
+#include "pdftools/error_handling.hpp"
+
 namespace pdftools::pdf {
 
 namespace {
@@ -301,62 +303,71 @@ Status ExtractText(const ExtractTextRequest& request, ExtractTextResult* result)
     }
   }
 
-  std::string primary_error_message = "failed to extract text from PDF";
+  Status primary_status = GuardStatus(
+      [&]() -> Status {
+        PoDoFo::PdfMemDocument document;
+        std::string load_error_message;
+        Status load_status = TryLoadDocument(&document, request.input_pdf, &load_error_message);
+        if (!load_status.ok()) {
+          return Status::Error(
+              ErrorCode::kPdfParseFailed,
+              load_error_message.empty() ? load_status.message() : load_error_message,
+              request.input_pdf);
+        }
 
-  try {
-    PoDoFo::PdfMemDocument document;
-    Status load_status = TryLoadDocument(&document, request.input_pdf, &primary_error_message);
-    if (!load_status.ok()) {
-      throw std::runtime_error(primary_error_message);
-    }
-    const uint32_t total_pages = document.GetPages().GetCount();
+        const uint32_t total_pages = document.GetPages().GetCount();
 
-    uint32_t begin_page = 0;
-    uint32_t end_page = 0;
-    Status range_status =
-        ResolvePageRange(total_pages, request.page_start, request.page_end, &begin_page, &end_page);
-    if (!range_status.ok()) {
-      return range_status;
-    }
+        uint32_t begin_page = 0;
+        uint32_t end_page = 0;
+        Status range_status =
+            ResolvePageRange(total_pages, request.page_start, request.page_end, &begin_page, &end_page);
+        if (!range_status.ok()) {
+          return range_status;
+        }
 
-    std::vector<TextEntry> entries;
-    for (uint32_t page_index = begin_page; page_index <= end_page; ++page_index) {
-      const auto& page = document.GetPages().GetPageAt(page_index);
-      std::vector<PoDoFo::PdfTextEntry> page_entries;
-      PoDoFo::PdfTextExtractParams params;
-      page.ExtractTextTo(page_entries, params);
+        std::vector<TextEntry> entries;
+        for (uint32_t page_index = begin_page; page_index <= end_page; ++page_index) {
+          const auto& page = document.GetPages().GetPageAt(page_index);
+          std::vector<PoDoFo::PdfTextEntry> page_entries;
+          PoDoFo::PdfTextExtractParams params;
+          page.ExtractTextTo(page_entries, params);
 
-      for (const auto& page_entry : page_entries) {
-        TextEntry entry;
-        entry.page = page_index + 1;
-        entry.x = page_entry.X;
-        entry.y = page_entry.Y;
-        entry.length = page_entry.Length;
-        entry.text = page_entry.Text;
-        entries.push_back(std::move(entry));
-      }
-    }
+          for (const auto& page_entry : page_entries) {
+            TextEntry entry;
+            entry.page = page_index + 1;
+            entry.x = page_entry.X;
+            entry.y = page_entry.Y;
+            entry.length = page_entry.Length;
+            entry.text = page_entry.Text;
+            entries.push_back(std::move(entry));
+          }
+        }
 
-    result->entries = entries;
-    result->entry_count = static_cast<uint32_t>(entries.size());
-    result->page_count = end_page - begin_page + 1;
-    result->used_fallback = false;
-    result->extractor = "podofo";
-    if (request.output_format == TextOutputFormat::kJson) {
-      result->text = BuildJsonText(entries);
-    } else {
-      result->text = BuildPlainText(entries);
-    }
+        result->entries = entries;
+        result->entry_count = static_cast<uint32_t>(entries.size());
+        result->page_count = end_page - begin_page + 1;
+        result->used_fallback = false;
+        result->extractor = "podofo";
+        if (request.output_format == TextOutputFormat::kJson) {
+          result->text = BuildJsonText(entries);
+        } else {
+          result->text = BuildPlainText(entries);
+        }
 
-    return WriteOutputFile(request.output_path, result->text);
-  } catch (const std::exception& e) {
-    primary_error_message = e.what();
-  } catch (...) {
-    primary_error_message = "failed to extract text from PDF";
+        return WriteOutputFile(request.output_path, result->text);
+      },
+      ErrorCode::kPdfParseFailed,
+      "failed to extract text from PDF",
+      request.input_pdf);
+
+  if (primary_status.ok()) {
+    return Status::Ok();
   }
-
+  if (primary_status.code() != ErrorCode::kPdfParseFailed) {
+    return primary_status;
+  }
   if (!request.best_effort) {
-    return Status::Error(ErrorCode::kPdfParseFailed, primary_error_message);
+    return primary_status;
   }
 
   // Fallback for malformed but still salvageable PDFs.
@@ -365,7 +376,7 @@ Status ExtractText(const ExtractTextRequest& request, ExtractTextResult* result)
     return Status::Ok();
   }
 
-  return Status::Error(ErrorCode::kPdfParseFailed, primary_error_message);
+  return primary_status;
 }
 
 Status ExtractAttachments(const ExtractAttachmentsRequest& request, ExtractAttachmentsResult* result) {
@@ -386,78 +397,81 @@ Status ExtractAttachments(const ExtractAttachmentsRequest& request, ExtractAttac
     return Status::Error(ErrorCode::kIoError, "failed to create output directory", request.output_dir);
   }
 
-  try {
-    PoDoFo::PdfMemDocument document;
-    std::string load_error_message;
-    Status load_status = TryLoadDocument(&document, request.input_pdf, &load_error_message);
-    if (!load_status.ok()) {
-      if (request.best_effort) {
-        result->attachments.clear();
-        result->parse_failed = true;
-        result->parser = "none";
-        return Status::Ok();
-      }
-      return Status::Error(ErrorCode::kPdfParseFailed, load_error_message);
-    }
-
-    result->parse_failed = false;
-    result->parser = "podofo";
-
-    PoDoFo::PdfNameTrees* names = document.GetNames();
-    if (names == nullptr) {
-      return Status::Ok();
-    }
-
-    PoDoFo::PdfEmbeddedFiles* tree = names->GetTree<PoDoFo::PdfEmbeddedFiles>();
-    if (tree == nullptr) {
-      return Status::Ok();
-    }
-
-    PoDoFo::PdfNameTree<PoDoFo::PdfFileSpec>::Map embedded_files;
-    tree->ToDictionary(embedded_files);
-
-    for (const auto& [key, file_spec] : embedded_files) {
-      if (!file_spec) {
-        continue;
-      }
-      auto data = file_spec->GetEmbeddedData();
-      if (!data.has_value()) {
-        continue;
-      }
-
-      std::string filename = std::string(key.GetString());
-      if (filename.empty()) {
-        auto maybe_name = file_spec->GetFilename();
-        if (maybe_name.has_value()) {
-          filename = std::string(maybe_name->GetString());
+  return GuardStatus(
+      [&]() -> Status {
+        PoDoFo::PdfMemDocument document;
+        std::string load_error_message;
+        Status load_status = TryLoadDocument(&document, request.input_pdf, &load_error_message);
+        if (!load_status.ok()) {
+          if (request.best_effort) {
+            result->attachments.clear();
+            result->parse_failed = true;
+            result->parser = "none";
+            return Status::Ok();
+          }
+          return Status::Error(
+              ErrorCode::kPdfParseFailed,
+              load_error_message.empty() ? load_status.message() : load_error_message,
+              request.input_pdf);
         }
-      }
-      filename = SanitizeFilename(filename);
-      std::filesystem::path out_path = ResolveUniqueOutputPath(output_dir / filename, request.overwrite);
 
-      std::ofstream out(out_path, std::ios::binary);
-      if (!out.is_open()) {
-        return Status::Error(ErrorCode::kIoError, "failed to open attachment output file", out_path.string());
-      }
-      out.write(data->data(), static_cast<std::streamsize>(data->size()));
-      out.close();
-      if (!out.good()) {
-        return Status::Error(ErrorCode::kIoError, "failed to write attachment file", out_path.string());
-      }
+        result->parse_failed = false;
+        result->parser = "podofo";
 
-      AttachmentInfo info;
-      info.filename = filename;
-      info.path = out_path.string();
-      info.size_bytes = static_cast<uint64_t>(data->size());
-      result->attachments.push_back(std::move(info));
-    }
+        PoDoFo::PdfNameTrees* names = document.GetNames();
+        if (names == nullptr) {
+          return Status::Ok();
+        }
 
-    return Status::Ok();
-  } catch (const std::exception& e) {
-    return Status::Error(ErrorCode::kPdfParseFailed, e.what());
-  } catch (...) {
-    return Status::Error(ErrorCode::kPdfParseFailed, "failed to extract attachments from PDF");
-  }
+        PoDoFo::PdfEmbeddedFiles* tree = names->GetTree<PoDoFo::PdfEmbeddedFiles>();
+        if (tree == nullptr) {
+          return Status::Ok();
+        }
+
+        PoDoFo::PdfNameTree<PoDoFo::PdfFileSpec>::Map embedded_files;
+        tree->ToDictionary(embedded_files);
+
+        for (const auto& [key, file_spec] : embedded_files) {
+          if (!file_spec) {
+            continue;
+          }
+          auto data = file_spec->GetEmbeddedData();
+          if (!data.has_value()) {
+            continue;
+          }
+
+          std::string filename = std::string(key.GetString());
+          if (filename.empty()) {
+            auto maybe_name = file_spec->GetFilename();
+            if (maybe_name.has_value()) {
+              filename = std::string(maybe_name->GetString());
+            }
+          }
+          filename = SanitizeFilename(filename);
+          std::filesystem::path out_path = ResolveUniqueOutputPath(output_dir / filename, request.overwrite);
+
+          std::ofstream out(out_path, std::ios::binary);
+          if (!out.is_open()) {
+            return Status::Error(ErrorCode::kIoError, "failed to open attachment output file", out_path.string());
+          }
+          out.write(data->data(), static_cast<std::streamsize>(data->size()));
+          out.close();
+          if (!out.good()) {
+            return Status::Error(ErrorCode::kIoError, "failed to write attachment file", out_path.string());
+          }
+
+          AttachmentInfo info;
+          info.filename = filename;
+          info.path = out_path.string();
+          info.size_bytes = static_cast<uint64_t>(data->size());
+          result->attachments.push_back(std::move(info));
+        }
+
+        return Status::Ok();
+      },
+      ErrorCode::kPdfParseFailed,
+      "failed to extract attachments from PDF",
+      request.input_pdf);
 }
 
 }  // namespace pdftools::pdf

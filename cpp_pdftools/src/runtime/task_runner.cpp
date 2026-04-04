@@ -1,4 +1,5 @@
 #include "pdftools/task.hpp"
+#include "pdftools/error_handling.hpp"
 
 #include <thread>
 
@@ -80,7 +81,11 @@ TaskHandle TaskRunner::Submit(const TaskRequest& request,
     }
 
     std::any result;
-    Status status = registry_.Execute(request.operation_id, request.payload, &result, context);
+    Status status = GuardStatus(
+        [&]() -> Status { return registry_.Execute(request.operation_id, request.payload, &result, context); },
+        ErrorCode::kInternalError,
+        "task execution raised an exception",
+        request.operation_id);
 
     {
       std::scoped_lock lock(mutex_);
@@ -138,4 +143,3 @@ Status TaskRunner::Query(TaskHandle handle, TaskState* state) const {
 }
 
 }  // namespace pdftools
-

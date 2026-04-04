@@ -5,6 +5,8 @@
 
 #include <podofo/podofo.h>
 
+#include "pdftools/error_handling.hpp"
+
 namespace pdftools::pdf {
 
 namespace {
@@ -53,26 +55,26 @@ Status MergePdf(const MergePdfRequest& request, MergePdfResult* result) {
     return output_status;
   }
 
-  try {
-    PoDoFo::PdfMemDocument output_document;
-    for (const auto& input_path : request.input_pdfs) {
-      if (input_path.empty()) {
-        return Status::Error(ErrorCode::kInvalidArgument, "input PDF path must not be empty");
-      }
+  return GuardStatus(
+      [&]() -> Status {
+        PoDoFo::PdfMemDocument output_document;
+        for (const auto& input_path : request.input_pdfs) {
+          if (input_path.empty()) {
+            return Status::Error(ErrorCode::kInvalidArgument, "input PDF path must not be empty");
+          }
 
-      PoDoFo::PdfMemDocument input_document;
-      input_document.Load(input_path);
-      output_document.GetPages().AppendDocumentPages(input_document);
-    }
+          PoDoFo::PdfMemDocument input_document;
+          input_document.Load(input_path);
+          output_document.GetPages().AppendDocumentPages(input_document);
+        }
 
-    output_document.Save(request.output_pdf);
-    result->output_page_count = output_document.GetPages().GetCount();
-    return Status::Ok();
-  } catch (const std::exception& e) {
-    return Status::Error(ErrorCode::kPdfParseFailed, e.what());
-  } catch (...) {
-    return Status::Error(ErrorCode::kPdfParseFailed, "failed to merge PDF documents");
-  }
+        output_document.Save(request.output_pdf);
+        result->output_page_count = output_document.GetPages().GetCount();
+        return Status::Ok();
+      },
+      ErrorCode::kPdfParseFailed,
+      "failed to merge PDF documents",
+      request.output_pdf);
 }
 
 Status GetPdfInfo(const PdfInfoRequest& request, PdfInfoResult* result) {
@@ -88,16 +90,16 @@ Status GetPdfInfo(const PdfInfoRequest& request, PdfInfoResult* result) {
     return Status::Error(ErrorCode::kNotFound, "input PDF does not exist", request.input_pdf);
   }
 
-  try {
-    PoDoFo::PdfMemDocument document;
-    document.Load(request.input_pdf);
-    result->page_count = document.GetPages().GetCount();
-    return Status::Ok();
-  } catch (const std::exception& e) {
-    return Status::Error(ErrorCode::kPdfParseFailed, e.what());
-  } catch (...) {
-    return Status::Error(ErrorCode::kPdfParseFailed, "failed to parse PDF info");
-  }
+  return GuardStatus(
+      [&]() -> Status {
+        PoDoFo::PdfMemDocument document;
+        document.Load(request.input_pdf);
+        result->page_count = document.GetPages().GetCount();
+        return Status::Ok();
+      },
+      ErrorCode::kPdfParseFailed,
+      "failed to parse PDF info",
+      request.input_pdf);
 }
 
 Status DeletePage(const DeletePageRequest& request, DeletePageResult* result) {
@@ -113,28 +115,28 @@ Status DeletePage(const DeletePageRequest& request, DeletePageResult* result) {
     return output_status;
   }
 
-  try {
-    PoDoFo::PdfMemDocument document;
-    document.Load(request.input_pdf);
-    const uint32_t page_count = document.GetPages().GetCount();
+  return GuardStatus(
+      [&]() -> Status {
+        PoDoFo::PdfMemDocument document;
+        document.Load(request.input_pdf);
+        const uint32_t page_count = document.GetPages().GetCount();
 
-    Status page_status = ValidatePageNumber(request.page_number, page_count, "page_number");
-    if (!page_status.ok()) {
-      return page_status;
-    }
-    if (page_count <= 1) {
-      return Status::Error(ErrorCode::kUnsupportedFeature, "cannot delete the last page of a document");
-    }
+        Status page_status = ValidatePageNumber(request.page_number, page_count, "page_number");
+        if (!page_status.ok()) {
+          return page_status;
+        }
+        if (page_count <= 1) {
+          return Status::Error(ErrorCode::kUnsupportedFeature, "cannot delete the last page of a document");
+        }
 
-    document.GetPages().RemovePageAt(request.page_number - 1);
-    document.Save(request.output_pdf);
-    result->output_page_count = document.GetPages().GetCount();
-    return Status::Ok();
-  } catch (const std::exception& e) {
-    return Status::Error(ErrorCode::kPdfParseFailed, e.what());
-  } catch (...) {
-    return Status::Error(ErrorCode::kPdfParseFailed, "failed to delete page");
-  }
+        document.GetPages().RemovePageAt(request.page_number - 1);
+        document.Save(request.output_pdf);
+        result->output_page_count = document.GetPages().GetCount();
+        return Status::Ok();
+      },
+      ErrorCode::kPdfParseFailed,
+      "failed to delete page",
+      request.input_pdf);
 }
 
 Status InsertPage(const InsertPageRequest& request, InsertPageResult* result) {
@@ -150,32 +152,32 @@ Status InsertPage(const InsertPageRequest& request, InsertPageResult* result) {
     return output_status;
   }
 
-  try {
-    PoDoFo::PdfMemDocument target_document;
-    target_document.Load(request.input_pdf);
-    const uint32_t target_page_count = target_document.GetPages().GetCount();
-    if (request.insert_at == 0 || request.insert_at > target_page_count + 1) {
-      return Status::Error(ErrorCode::kInvalidArgument, "insert_at must be between 1 and page_count + 1");
-    }
+  return GuardStatus(
+      [&]() -> Status {
+        PoDoFo::PdfMemDocument target_document;
+        target_document.Load(request.input_pdf);
+        const uint32_t target_page_count = target_document.GetPages().GetCount();
+        if (request.insert_at == 0 || request.insert_at > target_page_count + 1) {
+          return Status::Error(ErrorCode::kInvalidArgument, "insert_at must be between 1 and page_count + 1");
+        }
 
-    PoDoFo::PdfMemDocument source_document;
-    source_document.Load(request.source_pdf);
-    const uint32_t source_page_count = source_document.GetPages().GetCount();
-    Status page_status = ValidatePageNumber(request.source_page_number, source_page_count, "source_page_number");
-    if (!page_status.ok()) {
-      return page_status;
-    }
+        PoDoFo::PdfMemDocument source_document;
+        source_document.Load(request.source_pdf);
+        const uint32_t source_page_count = source_document.GetPages().GetCount();
+        Status page_status = ValidatePageNumber(request.source_page_number, source_page_count, "source_page_number");
+        if (!page_status.ok()) {
+          return page_status;
+        }
 
-    target_document.GetPages().InsertDocumentPageAt(request.insert_at - 1, source_document,
-                                                    request.source_page_number - 1);
-    target_document.Save(request.output_pdf);
-    result->output_page_count = target_document.GetPages().GetCount();
-    return Status::Ok();
-  } catch (const std::exception& e) {
-    return Status::Error(ErrorCode::kPdfParseFailed, e.what());
-  } catch (...) {
-    return Status::Error(ErrorCode::kPdfParseFailed, "failed to insert page");
-  }
+        target_document.GetPages().InsertDocumentPageAt(request.insert_at - 1, source_document,
+                                                        request.source_page_number - 1);
+        target_document.Save(request.output_pdf);
+        result->output_page_count = target_document.GetPages().GetCount();
+        return Status::Ok();
+      },
+      ErrorCode::kPdfParseFailed,
+      "failed to insert page",
+      request.input_pdf);
 }
 
 Status ReplacePage(const ReplacePageRequest& request, ReplacePageResult* result) {
@@ -191,34 +193,34 @@ Status ReplacePage(const ReplacePageRequest& request, ReplacePageResult* result)
     return output_status;
   }
 
-  try {
-    PoDoFo::PdfMemDocument target_document;
-    target_document.Load(request.input_pdf);
-    const uint32_t target_page_count = target_document.GetPages().GetCount();
-    Status page_status = ValidatePageNumber(request.page_number, target_page_count, "page_number");
-    if (!page_status.ok()) {
-      return page_status;
-    }
+  return GuardStatus(
+      [&]() -> Status {
+        PoDoFo::PdfMemDocument target_document;
+        target_document.Load(request.input_pdf);
+        const uint32_t target_page_count = target_document.GetPages().GetCount();
+        Status page_status = ValidatePageNumber(request.page_number, target_page_count, "page_number");
+        if (!page_status.ok()) {
+          return page_status;
+        }
 
-    PoDoFo::PdfMemDocument source_document;
-    source_document.Load(request.source_pdf);
-    const uint32_t source_page_count = source_document.GetPages().GetCount();
-    page_status = ValidatePageNumber(request.source_page_number, source_page_count, "source_page_number");
-    if (!page_status.ok()) {
-      return page_status;
-    }
+        PoDoFo::PdfMemDocument source_document;
+        source_document.Load(request.source_pdf);
+        const uint32_t source_page_count = source_document.GetPages().GetCount();
+        page_status = ValidatePageNumber(request.source_page_number, source_page_count, "source_page_number");
+        if (!page_status.ok()) {
+          return page_status;
+        }
 
-    const unsigned replace_index = request.page_number - 1;
-    target_document.GetPages().RemovePageAt(replace_index);
-    target_document.GetPages().InsertDocumentPageAt(replace_index, source_document, request.source_page_number - 1);
-    target_document.Save(request.output_pdf);
-    result->output_page_count = target_document.GetPages().GetCount();
-    return Status::Ok();
-  } catch (const std::exception& e) {
-    return Status::Error(ErrorCode::kPdfParseFailed, e.what());
-  } catch (...) {
-    return Status::Error(ErrorCode::kPdfParseFailed, "failed to replace page");
-  }
+        const unsigned replace_index = request.page_number - 1;
+        target_document.GetPages().RemovePageAt(replace_index);
+        target_document.GetPages().InsertDocumentPageAt(replace_index, source_document, request.source_page_number - 1);
+        target_document.Save(request.output_pdf);
+        result->output_page_count = target_document.GetPages().GetCount();
+        return Status::Ok();
+      },
+      ErrorCode::kPdfParseFailed,
+      "failed to replace page",
+      request.input_pdf);
 }
 
 }  // namespace pdftools::pdf

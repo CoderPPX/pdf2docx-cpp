@@ -1622,3 +1622,112 @@ V2 结果摘要：
 2. `cpp_pdftools`：`7/7 passed`。
 3. `cpp_pdftools_gui`：`12/12 passed`。
 4. `formula.pdf`：`m:oMathPara` 从 V1 的 `1` 提升到 V2 的 `8`。
+
+## `formula.pdf` 公式识别优化（V3）
+
+- 记录时间：`2026-04-04 09:40:30 EDT (-0400)`
+
+本轮完成：
+1. 在 `cpp_pdf2docx/src/docx/p0_writer.cpp` 实现 V3 优化：
+   - 复合数学 span 拆分（大 span token 化）以改进独立上标回挂；
+   - 脚本判定排除单括号 token；
+   - 多行公式续行合并（`=` 开头等继续行并入上一公式）。
+2. 增强单测：
+   - `cpp_pdf2docx/tests/unit/docx_math_test.cpp` 增加续行公式与“`a+b=c` + 独立上标”场景。
+3. 同步迁移到 `pdftools` legacy writer：
+   - `cpp_pdftools/src/legacy_pdf2docx/docx/p0_writer.cpp`。
+4. 新增交接文档：
+   - `prompts/module-12-formula-optimization-v3.md`
+   - `prompts/formula-pdf-test-report-v3.md`
+
+验证结果：
+1. `cpp_pdf2docx`: `17/17 passed`
+2. `cpp_pdftools`: `7/7 passed`
+3. `cpp_pdftools_gui`: `12/12 passed`
+4. `formula.pdf`：
+   - `m:oMathPara=7`（V2 为 8，因续行合并）；
+   - 关键改进：`a+b=c222` -> `a2+b2=c2`；
+   - 多行等式已合并为单条数学段。
+
+## `formula.pdf` 公式识别优化（V4）
+
+- 记录时间：`2026-04-04 09:49:20 EDT (-0400)`
+
+本轮完成：
+1. 在 `cpp_pdf2docx/src/docx/p0_writer.cpp` 增加线性表达式归一化：
+   - 将 `= _a ^b` / `= ^b _a` 归一化为 `= b/a`；
+   - 接入 `AppendMathParagraph` 解析前流程。
+2. 同步到 `pdftools` legacy writer：
+   - `cpp_pdftools/src/legacy_pdf2docx/docx/p0_writer.cpp`。
+3. 新增交接文档：
+   - `prompts/module-13-formula-optimization-v4.md`
+   - `prompts/formula-pdf-test-report-v4.md`
+
+验证结果：
+1. `cpp_pdf2docx`: `17/17 passed`
+2. `cpp_pdftools`: `7/7 passed`
+3. `cpp_pdftools_gui`: `12/12 passed`
+4. `formula.pdf`：
+   - `m:oMathPara=7`（与 V3 一致）
+   - `m:f=1`（V3 为 0，新增分式结构命中）
+
+## 数学公式阶段性交接（暂停点）
+
+- 记录时间：`2026-04-04 10:18:00 EDT (-0400)`
+- 用户指令：先暂停数学公式继续开发，把当前成果输出到 `prompts` 便于后续 LLM 交接。
+
+本次已输出文档：
+1. `prompts/module-14-formula-handoff-v5.md`
+2. `prompts/formula-pdf-test-report-v5.md`
+
+当前代码状态（暂停前）：
+1. 公式行聚类、复合 span 拆分、续行合并、线性归一化、隐式乘法解析均已落地。
+2. `formula.pdf` 最新结果：`m:oMathPara=7`, `m:f=1`, `m:sSup=9`, `m:sSub=4`, `m:sSubSup=1`。
+3. 全部测试通过：
+   - `cpp_pdf2docx`: `17/17`
+   - `cpp_pdftools`: `7/7`
+   - `cpp_pdftools_gui`: `12/12`
+
+## `image-text.pdf` 标题排版修复
+
+- 记录时间：`2026-04-04 12:47:00 EDT (-0400)`
+
+本轮完成：
+1. 在 `cpp_pdf2docx/src/docx/p0_writer.cpp` 增加标题识别与标题段落写出：
+   - 首页顶部标题行识别；
+   - 双行标题合并为单段并插入 `w:br`；
+   - 标题 run 增加加粗与字号（`w:sz=36`）。
+2. 同步迁移至 `pdftools` legacy writer：
+   - `cpp_pdftools/src/legacy_pdf2docx/docx/p0_writer.cpp`。
+3. 回归生成：
+   - `cpp_pdf2docx/build/final_image_text.docx`（已重新生成）
+   - `/tmp/image_text_title_fix.docx`
+4. 验证结果：
+   - `cpp_pdf2docx`: `17/17 passed`
+   - `cpp_pdftools`: `7/7 passed`
+   - `cpp_pdftools_gui`: `12/12 passed`
+
+## pdftools 总进度汇总输出
+
+- 记录时间：`2026-04-04 12:53:00 EDT (-0400)`
+- 用户请求：输出当前 `pdftools` 总进度到 console 和 prompts，并回答测试是否完全正确。
+
+已完成：
+1. 新增总进度文档：`prompts/pdftools-progress-summary-v2.md`
+2. 文档已包含：
+   - 已完成模块范围（core/CLI/GUI/pdf2docx）
+   - 最近测试结果（17/17, 7/7, 12/12）
+   - 人工检查文件路径
+   - 对“是否完全正确”的明确结论（否）与原因。
+
+---
+
+## PTools Native/WASM 异常统一记录（Module 16）
+
+- 记录时间：`2026-04-04`
+- 详细设计与实现说明：`prompts/module-16-native-wasm-exception-policy-v1.md`
+- 关键结果：
+  - 新增统一异常桥接模块（`GuardStatus/CurrentExceptionToStatus`）。
+  - `cpp_pdftools` 核心模块、CLI、GUI 服务层异常处理已统一并加 context。
+  - `web_pdftools/wasm` worker 协议错误模型统一为 `code/message/context/details`。
+  - 新增 C++/JS 测试并全部通过。

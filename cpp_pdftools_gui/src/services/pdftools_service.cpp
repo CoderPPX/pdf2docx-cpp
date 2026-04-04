@@ -1,5 +1,6 @@
 #include "pdftools_gui/services/pdftools_service.hpp"
 
+#include <exception>
 #include <sstream>
 
 namespace pdftools_gui::services {
@@ -18,54 +19,68 @@ ExecutionOutcome InvalidRequestType(OperationKind op) {
 }  // namespace
 
 ExecutionOutcome PdfToolsService::Execute(OperationKind op, const RequestVariant& request) const {
-  switch (op) {
-    case OperationKind::kMergePdf:
-      if (const auto* typed = std::get_if<pdftools::pdf::MergePdfRequest>(&request)) {
-        return ExecuteMerge(*typed);
-      }
-      return InvalidRequestType<pdftools::pdf::MergePdfRequest>(op);
-    case OperationKind::kExtractText:
-      if (const auto* typed = std::get_if<pdftools::pdf::ExtractTextRequest>(&request)) {
-        return ExecuteTextExtract(*typed);
-      }
-      return InvalidRequestType<pdftools::pdf::ExtractTextRequest>(op);
-    case OperationKind::kExtractAttachments:
-      if (const auto* typed = std::get_if<pdftools::pdf::ExtractAttachmentsRequest>(&request)) {
-        return ExecuteAttachmentExtract(*typed);
-      }
-      return InvalidRequestType<pdftools::pdf::ExtractAttachmentsRequest>(op);
-    case OperationKind::kImagesToPdf:
-      if (const auto* typed = std::get_if<pdftools::pdf::ImagesToPdfRequest>(&request)) {
-        return ExecuteImagesToPdf(*typed);
-      }
-      return InvalidRequestType<pdftools::pdf::ImagesToPdfRequest>(op);
-    case OperationKind::kDeletePage:
-      if (const auto* typed = std::get_if<pdftools::pdf::DeletePageRequest>(&request)) {
-        return ExecuteDeletePage(*typed);
-      }
-      return InvalidRequestType<pdftools::pdf::DeletePageRequest>(op);
-    case OperationKind::kInsertPage:
-      if (const auto* typed = std::get_if<pdftools::pdf::InsertPageRequest>(&request)) {
-        return ExecuteInsertPage(*typed);
-      }
-      return InvalidRequestType<pdftools::pdf::InsertPageRequest>(op);
-    case OperationKind::kReplacePage:
-      if (const auto* typed = std::get_if<pdftools::pdf::ReplacePageRequest>(&request)) {
-        return ExecuteReplacePage(*typed);
-      }
-      return InvalidRequestType<pdftools::pdf::ReplacePageRequest>(op);
-    case OperationKind::kPdfToDocx:
-      if (const auto* typed = std::get_if<pdftools::convert::PdfToDocxRequest>(&request)) {
-        return ExecutePdfToDocx(*typed);
-      }
-      return InvalidRequestType<pdftools::convert::PdfToDocxRequest>(op);
-  }
+  try {
+    switch (op) {
+      case OperationKind::kMergePdf:
+        if (const auto* typed = std::get_if<pdftools::pdf::MergePdfRequest>(&request)) {
+          return ExecuteMerge(*typed);
+        }
+        return InvalidRequestType<pdftools::pdf::MergePdfRequest>(op);
+      case OperationKind::kExtractText:
+        if (const auto* typed = std::get_if<pdftools::pdf::ExtractTextRequest>(&request)) {
+          return ExecuteTextExtract(*typed);
+        }
+        return InvalidRequestType<pdftools::pdf::ExtractTextRequest>(op);
+      case OperationKind::kExtractAttachments:
+        if (const auto* typed = std::get_if<pdftools::pdf::ExtractAttachmentsRequest>(&request)) {
+          return ExecuteAttachmentExtract(*typed);
+        }
+        return InvalidRequestType<pdftools::pdf::ExtractAttachmentsRequest>(op);
+      case OperationKind::kImagesToPdf:
+        if (const auto* typed = std::get_if<pdftools::pdf::ImagesToPdfRequest>(&request)) {
+          return ExecuteImagesToPdf(*typed);
+        }
+        return InvalidRequestType<pdftools::pdf::ImagesToPdfRequest>(op);
+      case OperationKind::kDeletePage:
+        if (const auto* typed = std::get_if<pdftools::pdf::DeletePageRequest>(&request)) {
+          return ExecuteDeletePage(*typed);
+        }
+        return InvalidRequestType<pdftools::pdf::DeletePageRequest>(op);
+      case OperationKind::kInsertPage:
+        if (const auto* typed = std::get_if<pdftools::pdf::InsertPageRequest>(&request)) {
+          return ExecuteInsertPage(*typed);
+        }
+        return InvalidRequestType<pdftools::pdf::InsertPageRequest>(op);
+      case OperationKind::kReplacePage:
+        if (const auto* typed = std::get_if<pdftools::pdf::ReplacePageRequest>(&request)) {
+          return ExecuteReplacePage(*typed);
+        }
+        return InvalidRequestType<pdftools::pdf::ReplacePageRequest>(op);
+      case OperationKind::kPdfToDocx:
+        if (const auto* typed = std::get_if<pdftools::convert::PdfToDocxRequest>(&request)) {
+          return ExecutePdfToDocx(*typed);
+        }
+        return InvalidRequestType<pdftools::convert::PdfToDocxRequest>(op);
+    }
 
-  ExecutionOutcome outcome;
-  outcome.success = false;
-  outcome.summary = QStringLiteral("未知操作");
-  outcome.detail = QStringLiteral("未识别的 OperationKind 值");
-  return outcome;
+    ExecutionOutcome outcome;
+    outcome.success = false;
+    outcome.summary = QStringLiteral("未知操作");
+    outcome.detail = QStringLiteral("未识别的 OperationKind 值");
+    return outcome;
+  } catch (const std::exception& e) {
+    ExecutionOutcome outcome;
+    outcome.success = false;
+    outcome.summary = QStringLiteral("%1 异常").arg(PdfToolsService::OperationDisplayName(op));
+    outcome.detail = QStringLiteral("Unexpected exception: %1").arg(QString::fromUtf8(e.what()));
+    return outcome;
+  } catch (...) {
+    ExecutionOutcome outcome;
+    outcome.success = false;
+    outcome.summary = QStringLiteral("%1 异常").arg(PdfToolsService::OperationDisplayName(op));
+    outcome.detail = QStringLiteral("Unknown exception");
+    return outcome;
+  }
 }
 
 QString PdfToolsService::OperationDisplayName(OperationKind op) {

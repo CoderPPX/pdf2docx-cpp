@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdint>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <set>
 #include <sstream>
@@ -421,6 +422,21 @@ double SpanHeight(const ir::TextSpan& span) {
 }
 
 template <typename T>
+double MedianValue(std::vector<T> values);
+
+double OrderedLineBaseline(const std::vector<const ir::TextSpan*>& ordered_line_spans) {
+  std::vector<double> baselines;
+  baselines.reserve(ordered_line_spans.size());
+  for (const auto* span : ordered_line_spans) {
+    if (span == nullptr || span->text.empty()) {
+      continue;
+    }
+    baselines.push_back(SpanBaselineY(*span));
+  }
+  return MedianValue(std::move(baselines));
+}
+
+template <typename T>
 double MedianValue(std::vector<T> values) {
   if (values.empty()) {
     return 0.0;
@@ -707,19 +723,181 @@ bool LooksMathToken(const std::string& text) {
   return false;
 }
 
+bool IsAsciiOnly(const std::string& text) {
+  for (unsigned char ch : text) {
+    if (ch >= 128) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool IsStrongMathSplitOperator(char ch) {
+  switch (ch) {
+    case '=':
+    case '+':
+    case '*':
+    case '/':
+    case '^':
+    case '_':
+    case '<':
+    case '>':
+    case '|':
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool IsMathBracketChar(char ch) {
+  return ch == '(' || ch == ')' || ch == '[' || ch == ']' || ch == '{' || ch == '}';
+}
+
+bool ShouldExplodeCompositeMathSpan(const ir::TextSpan& span) {
+  const std::string& text = span.text;
+  if (text.size() < 4 || text.size() > 72) {
+    return false;
+  }
+  if (!IsAsciiOnly(text) || IsScriptLikeSpan(span)) {
+    return false;
+  }
+
+  int strong_operator_count = 0;
+  int alnum_count = 0;
+  bool has_space = false;
+  for (unsigned char ch : text) {
+    if (std::isspace(ch)) {
+      has_space = true;
+      continue;
+    }
+    if (std::isalnum(ch)) {
+      ++alnum_count;
+      continue;
+    }
+    if (IsStrongMathSplitOperator(static_cast<char>(ch)) || IsMathBracketChar(static_cast<char>(ch))) {
+      if (IsStrongMathSplitOperator(static_cast<char>(ch))) {
+        ++strong_operator_count;
+      }
+      continue;
+    }
+    return false;
+  }
+
+  if (alnum_count < 2 || strong_operator_count == 0) {
+    return false;
+  }
+  return has_space || strong_operator_count >= 2;
+}
+
+std::vector<ir::TextSpan> ExplodeCompositeMathSpan(const ir::TextSpan& span) {
+  std::vector<ir::TextSpan> exploded;
+  const std::string& text = span.text;
+  if (text.empty()) {
+    return exploded;
+  }
+
+  const double span_left = SpanLeftX(span);
+  const double span_right = SpanRightX(span);
+  const double span_width = std::max(1.0, span_right - span_left);
+  const double span_height = SpanHeight(span);
+  const double bbox_y = span.has_bbox ? span.bbox.y : span.y;
+  const size_t text_len = text.size();
+  if (text_len == 0) {
+    return exploded;
+  }
+
+  size_t index = 0;
+  while (index < text_len) {
+    const unsigned char ch = static_cast<unsigned char>(text[index]);
+    if (std::isspace(ch)) {
+      ++index;
+      continue;
+    }
+
+    const size_t token_start = index;
+    if (std::isalnum(ch) || ch == '.') {
+      ++index;
+      while (index < text_len) {
+        const unsigned char next = static_cast<unsigned char>(text[index]);
+        if (!std::isalnum(next) && next != '.') {
+          break;
+        }
+        ++index;
+      }
+    } else {
+      ++index;
+    }
+    const size_t token_end = index;
+    if (token_end <= token_start) {
+      continue;
+    }
+
+    ir::TextSpan token_span = span;
+    token_span.text = text.substr(token_start, token_end - token_start);
+    const double token_left = span_left + span_width * (static_cast<double>(token_start) / static_cast<double>(text_len));
+    double token_right = span_left + span_width * (static_cast<double>(token_end) / static_cast<double>(text_len));
+    if (token_right <= token_left) {
+      token_right = token_left + std::max(1.0, span_width / static_cast<double>(text_len));
+    }
+    token_span.has_bbox = true;
+    token_span.bbox = {
+        .x = token_left,
+        .y = bbox_y,
+        .width = token_right - token_left,
+        .height = span_height,
+    };
+    token_span.x = token_left;
+    token_span.length = token_span.bbox.width;
+    exploded.push_back(std::move(token_span));
+  }
+
+  if (exploded.size() <= 1) {
+    exploded.clear();
+    exploded.push_back(span);
+  }
+  return exploded;
+}
+
+bool IsSingleBracketToken(const std::string& text) {
+  return text.size() == 1 && IsMathBracketChar(text.front());
+}
+
 MathLineCandidate BuildMathLinearText(const std::vector<const ir::TextSpan*>& ordered_line_spans) {
   MathLineCandidate candidate;
   if (ordered_line_spans.empty()) {
     return candidate;
   }
 
+  std::vector<ir::TextSpan> math_spans_storage;
+  math_spans_storage.reserve(ordered_line_spans.size() * 2);
+  for (const auto* span : ordered_line_spans) {
+    if (span == nullptr || span->text.empty()) {
+      continue;
+    }
+    if (ShouldExplodeCompositeMathSpan(*span)) {
+      std::vector<ir::TextSpan> exploded = ExplodeCompositeMathSpan(*span);
+      math_spans_storage.insert(math_spans_storage.end(),
+                                std::make_move_iterator(exploded.begin()),
+                                std::make_move_iterator(exploded.end()));
+      continue;
+    }
+    math_spans_storage.push_back(*span);
+  }
+
+  std::vector<const ir::TextSpan*> math_spans;
+  math_spans.reserve(math_spans_storage.size());
+  for (const auto& span : math_spans_storage) {
+    math_spans.push_back(&span);
+  }
+  math_spans = SortLineSpansForReading(math_spans);
+
   std::vector<double> anchor_baselines;
   std::vector<double> baselines;
   std::vector<double> heights;
-  anchor_baselines.reserve(ordered_line_spans.size());
-  baselines.reserve(ordered_line_spans.size());
-  heights.reserve(ordered_line_spans.size());
-  for (const auto* span : ordered_line_spans) {
+  anchor_baselines.reserve(math_spans.size());
+  baselines.reserve(math_spans.size());
+  heights.reserve(math_spans.size());
+  for (const auto* span : math_spans) {
     if (span == nullptr) {
       continue;
     }
@@ -738,12 +916,15 @@ MathLineCandidate BuildMathLinearText(const std::vector<const ir::TextSpan*>& or
 
   const ir::TextSpan* previous = nullptr;
   SpanScriptRole previous_role = SpanScriptRole::kNormal;
-  for (const auto* span : ordered_line_spans) {
+  for (const auto* span : math_spans) {
     if (span == nullptr || span->text.empty()) {
       continue;
     }
 
     SpanScriptRole role = DetectScriptRole(*span, line_baseline, script_threshold);
+    if (role != SpanScriptRole::kNormal && IsSingleBracketToken(span->text)) {
+      role = SpanScriptRole::kNormal;
+    }
     if (candidate.linear_text.empty()) {
       role = SpanScriptRole::kNormal;
     }
@@ -754,13 +935,18 @@ MathLineCandidate BuildMathLinearText(const std::vector<const ir::TextSpan*>& or
     if (role == SpanScriptRole::kNormal) {
       if (previous != nullptr && !candidate.linear_text.empty()) {
         const double gap_pt = SpanLeftX(*span) - SpanRightX(*previous);
+        const bool previous_was_script = previous_role != SpanScriptRole::kNormal;
+        const bool allow_space_after_script =
+            previous_was_script &&
+            gap_pt > 1.0 &&
+            (std::isalnum(static_cast<unsigned char>(span->text.front())) || span->text.front() == '(');
         const bool need_space =
             gap_pt > 1.0 &&
             !std::isspace(static_cast<unsigned char>(candidate.linear_text.back())) &&
             !std::isspace(static_cast<unsigned char>(span->text.front())) &&
             !IsRightAttachedPunctuation(span->text.front()) &&
             !IsLeftAttachedBracket(candidate.linear_text.back()) &&
-            previous_role == SpanScriptRole::kNormal;
+            (previous_role == SpanScriptRole::kNormal || allow_space_after_script);
         if (need_space) {
           candidate.linear_text.push_back(' ');
         }
@@ -866,6 +1052,86 @@ bool IsLikelyMathLine(const std::string& plain_text, const MathLineCandidate& ca
     return false;
   }
   return false;
+}
+
+bool StartsWithNumericHeading(const std::string& text) {
+  size_t index = 0;
+  while (index < text.size() && std::isspace(static_cast<unsigned char>(text[index]))) {
+    ++index;
+  }
+  if (index >= text.size() || !std::isdigit(static_cast<unsigned char>(text[index]))) {
+    return false;
+  }
+  while (index < text.size() && std::isdigit(static_cast<unsigned char>(text[index]))) {
+    ++index;
+  }
+  return index < text.size() && text[index] == '.';
+}
+
+bool LooksLikeTitleCaseLine(const std::string& text) {
+  size_t index = 0;
+  int word_count = 0;
+  int uppercase_initial_count = 0;
+  while (index < text.size()) {
+    while (index < text.size() && !std::isalpha(static_cast<unsigned char>(text[index]))) {
+      ++index;
+    }
+    if (index >= text.size()) {
+      break;
+    }
+    const size_t start = index;
+    while (index < text.size() && std::isalpha(static_cast<unsigned char>(text[index]))) {
+      ++index;
+    }
+    const std::string word = text.substr(start, index - start);
+    if (word.empty()) {
+      continue;
+    }
+    ++word_count;
+    if (std::isupper(static_cast<unsigned char>(word.front()))) {
+      ++uppercase_initial_count;
+    }
+  }
+  if (word_count == 0) {
+    return false;
+  }
+  if (word_count == 1) {
+    return uppercase_initial_count == 1;
+  }
+  return uppercase_initial_count * 10 >= word_count * 6;
+}
+
+bool IsLikelyTitleLine(const ir::Page& page,
+                       const std::string& line_text,
+                       double line_baseline,
+                       size_t line_index_on_page,
+                       bool has_pending_title) {
+  if (line_index_on_page > 2) {
+    return false;
+  }
+  if (!has_pending_title && line_index_on_page != 0) {
+    return false;
+  }
+  if (line_text.size() < 4) {
+    return false;
+  }
+  if (StartsWithNumericHeading(line_text)) {
+    return false;
+  }
+
+  int ascii_alpha_count = 0;
+  for (unsigned char ch : line_text) {
+    if (ch < 128 && std::isalpha(ch)) {
+      ++ascii_alpha_count;
+    }
+  }
+  if (ascii_alpha_count < 8) {
+    return false;
+  }
+  if (line_baseline < page.height_pt * 0.75) {
+    return false;
+  }
+  return LooksLikeTitleCaseLine(line_text);
 }
 
 enum class MathNodeKind {
@@ -1171,14 +1437,24 @@ class MathExpressionParser {
 
   MathNode ParseTerm() {
     MathNode node = ParsePostfix();
-    std::string op;
-    while (MatchOperator({"*", "×", "·", "/", "÷"}, &op)) {
-      MathNode rhs = ParsePostfix();
-      if (op == "/" || op == "÷") {
-        node = MakeFractionNode(std::move(node), std::move(rhs));
-      } else {
-        node = MergeWithOperator(std::move(node), op, std::move(rhs));
+    while (true) {
+      std::string op;
+      if (MatchOperator({"*", "×", "·", "/", "÷"}, &op)) {
+        MathNode rhs = ParsePostfix();
+        if (op == "/" || op == "÷") {
+          node = MakeFractionNode(std::move(node), std::move(rhs));
+        } else {
+          node = MergeWithOperator(std::move(node), op, std::move(rhs));
+        }
+        continue;
       }
+
+      if (Peek().type == MathTokenType::kText || Peek().type == MathTokenType::kLParen) {
+        MathNode rhs = ParsePostfix();
+        node = MergeWithOperator(std::move(node), "", std::move(rhs));
+        continue;
+      }
+      break;
     }
     return node;
   }
@@ -1424,6 +1700,169 @@ void AppendTextParagraph(tinyxml2::XMLDocument& document,
   run->InsertEndChild(text);
 }
 
+void AppendTitleParagraph(tinyxml2::XMLDocument& document,
+                          tinyxml2::XMLElement* body,
+                          const std::vector<std::string>& lines) {
+  if (lines.empty()) {
+    return;
+  }
+  auto* paragraph = document.NewElement("w:p");
+  body->InsertEndChild(paragraph);
+  AppendTightParagraphProperties(document, paragraph);
+
+  auto* run = document.NewElement("w:r");
+  paragraph->InsertEndChild(run);
+
+  auto* run_properties = document.NewElement("w:rPr");
+  run->InsertEndChild(run_properties);
+  auto* bold = document.NewElement("w:b");
+  run_properties->InsertEndChild(bold);
+  auto* size = document.NewElement("w:sz");
+  size->SetAttribute("w:val", "36");
+  run_properties->InsertEndChild(size);
+  auto* size_cs = document.NewElement("w:szCs");
+  size_cs->SetAttribute("w:val", "36");
+  run_properties->InsertEndChild(size_cs);
+
+  for (size_t index = 0; index < lines.size(); ++index) {
+    if (index > 0) {
+      auto* break_element = document.NewElement("w:br");
+      run->InsertEndChild(break_element);
+    }
+    auto* text = document.NewElement("w:t");
+    text->SetText(lines[index].c_str());
+    run->InsertEndChild(text);
+  }
+}
+
+size_t ReadLinearScriptToken(const std::string& expression,
+                             size_t index,
+                             std::string* token) {
+  if (token == nullptr || index >= expression.size()) {
+    return index;
+  }
+  if ((static_cast<unsigned char>(expression[index]) & 0x80u) != 0u) {
+    const size_t length = std::min(Utf8CharLength(static_cast<unsigned char>(expression[index])),
+                                   expression.size() - index);
+    *token = expression.substr(index, length);
+    return index + length;
+  }
+
+  const unsigned char ch = static_cast<unsigned char>(expression[index]);
+  if (std::isalnum(ch) || ch == '.') {
+    size_t end = index + 1;
+    while (end < expression.size()) {
+      const unsigned char next = static_cast<unsigned char>(expression[end]);
+      if (!std::isalnum(next) && next != '.') {
+        break;
+      }
+      ++end;
+    }
+    *token = expression.substr(index, end - index);
+    return end;
+  }
+
+  *token = expression.substr(index, 1);
+  return index + 1;
+}
+
+std::string NormalizeLinearMathExpression(const std::string& expression) {
+  if (expression.empty()) {
+    return expression;
+  }
+
+  std::string normalized;
+  normalized.reserve(expression.size() + 8);
+  size_t index = 0;
+  while (index < expression.size()) {
+    if (expression[index] == '=' && index + 1 < expression.size()) {
+      size_t probe = index + 1;
+      while (probe < expression.size() &&
+             std::isspace(static_cast<unsigned char>(expression[probe]))) {
+        ++probe;
+      }
+
+      if (probe < expression.size() && (expression[probe] == '_' || expression[probe] == '^')) {
+        const char first_marker = expression[probe];
+        ++probe;
+        std::string first_token;
+        probe = ReadLinearScriptToken(expression, probe, &first_token);
+        size_t after_first = probe;
+        while (after_first < expression.size() &&
+               std::isspace(static_cast<unsigned char>(expression[after_first]))) {
+          ++after_first;
+        }
+        if (after_first < expression.size() &&
+            ((first_marker == '_' && expression[after_first] == '^') ||
+             (first_marker == '^' && expression[after_first] == '_'))) {
+          const char second_marker = expression[after_first];
+          ++after_first;
+          std::string second_token;
+          const size_t after_second = ReadLinearScriptToken(expression, after_first, &second_token);
+          if (!first_token.empty() && !second_token.empty()) {
+            const std::string numerator = (first_marker == '^') ? first_token : second_token;
+            const std::string denominator = (second_marker == '_') ? second_token : first_token;
+            normalized.push_back('=');
+            normalized += numerator;
+            normalized.push_back('/');
+            normalized += denominator;
+            index = after_second;
+            continue;
+          }
+        }
+      }
+    }
+
+    normalized.push_back(expression[index]);
+    ++index;
+  }
+
+  const std::string integral_symbol = "∫";
+  const size_t integral_pos = normalized.find(integral_symbol);
+  if (integral_pos == std::string::npos) {
+    return normalized;
+  }
+
+  size_t probe = integral_pos + integral_symbol.size();
+  while (probe < normalized.size() &&
+         std::isspace(static_cast<unsigned char>(normalized[probe]))) {
+    ++probe;
+  }
+  if (probe >= normalized.size() || normalized[probe] == '_' || normalized[probe] == '^') {
+    return normalized;
+  }
+
+  if (probe + 1 >= normalized.size()) {
+    return normalized;
+  }
+  const unsigned char lower = static_cast<unsigned char>(normalized[probe]);
+  const unsigned char upper = static_cast<unsigned char>(normalized[probe + 1]);
+  if (!std::isalnum(lower) || !std::isalnum(upper)) {
+    return normalized;
+  }
+
+  std::string rebuilt;
+  rebuilt.reserve(normalized.size() + 4);
+  rebuilt.append(normalized.substr(0, integral_pos + integral_symbol.size()));
+  rebuilt.push_back('_');
+  rebuilt.push_back(static_cast<char>(lower));
+  rebuilt.push_back('^');
+  rebuilt.push_back(static_cast<char>(upper));
+  if (probe + 2 < normalized.size() &&
+      !std::isspace(static_cast<unsigned char>(normalized[probe + 2])) &&
+      normalized[probe + 2] != '+' &&
+      normalized[probe + 2] != '-' &&
+      normalized[probe + 2] != '*' &&
+      normalized[probe + 2] != '/' &&
+      normalized[probe + 2] != '=' &&
+      normalized[probe + 2] != ')' &&
+      normalized[probe + 2] != ']') {
+    rebuilt.push_back(' ');
+  }
+  rebuilt.append(normalized.substr(probe + 2));
+  return rebuilt;
+}
+
 bool AppendMathParagraph(tinyxml2::XMLDocument& document,
                          tinyxml2::XMLElement* body,
                          const std::string& linear_expression) {
@@ -1431,12 +1870,13 @@ bool AppendMathParagraph(tinyxml2::XMLDocument& document,
     return false;
   }
 
-  MathExpressionParser parser(TokenizeMathLinearText(linear_expression));
+  const std::string normalized_expression = NormalizeLinearMathExpression(linear_expression);
+  MathExpressionParser parser(TokenizeMathLinearText(normalized_expression));
   MathNode parsed = parser.Parse();
   MathNodeStats stats;
   CollectMathNodeStats(parsed, &stats);
   const int identifier_token_count = stats.ascii_alnum_token_count + stats.greek_identifier_token_count;
-  const bool has_unicode_math_symbol = ContainsMathSymbol(linear_expression);
+  const bool has_unicode_math_symbol = ContainsMathSymbol(normalized_expression);
   const bool should_emit_math =
       stats.has_structured_math ||
       (stats.operator_token_count > 0 && identifier_token_count >= 2) ||
@@ -1458,6 +1898,79 @@ bool AppendMathParagraph(tinyxml2::XMLDocument& document,
   return true;
 }
 
+std::string TrimLeadingWhitespace(std::string text) {
+  size_t first_non_space = 0;
+  while (first_non_space < text.size() &&
+         std::isspace(static_cast<unsigned char>(text[first_non_space]))) {
+    ++first_non_space;
+  }
+  text.erase(0, first_non_space);
+  return text;
+}
+
+bool StartsWithContinuationOperator(const std::string& expression) {
+  const std::string trimmed = TrimLeadingWhitespace(expression);
+  if (trimmed.empty()) {
+    return false;
+  }
+  switch (trimmed.front()) {
+    case '=':
+    case '+':
+    case '-':
+    case '*':
+    case '/':
+    case '^':
+    case '_':
+    case '<':
+    case '>':
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool EndsWithContinuationOperator(const std::string& expression) {
+  if (expression.empty()) {
+    return false;
+  }
+  size_t end = expression.size();
+  while (end > 0 && std::isspace(static_cast<unsigned char>(expression[end - 1]))) {
+    --end;
+  }
+  if (end == 0) {
+    return false;
+  }
+  switch (expression[end - 1]) {
+    case '=':
+    case '+':
+    case '-':
+    case '*':
+    case '/':
+    case '^':
+    case '_':
+    case '<':
+    case '>':
+    case '(':
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool ShouldMergeMathContinuation(const std::string& previous_expression,
+                                 const std::string& next_expression) {
+  if (previous_expression.empty() || next_expression.empty()) {
+    return false;
+  }
+  if (StartsWithContinuationOperator(next_expression)) {
+    return true;
+  }
+  if (EndsWithContinuationOperator(previous_expression)) {
+    return true;
+  }
+  return false;
+}
+
 void AppendPageTextParagraphs(tinyxml2::XMLDocument& document,
                               tinyxml2::XMLElement* body,
                               const ir::Page& page) {
@@ -1471,12 +1984,39 @@ void AppendPageTextParagraphs(tinyxml2::XMLDocument& document,
   std::vector<const ir::TextSpan*> current_line;
   double current_line_baseline = 0.0;
   bool has_current_line = false;
+  size_t page_line_index = 0;
+  std::string pending_math_expression;
+  bool has_pending_math_expression = false;
+  std::vector<std::string> pending_title_lines;
+
+  const auto flush_pending_math = [&]() {
+    if (!has_pending_math_expression || pending_math_expression.empty()) {
+      pending_math_expression.clear();
+      has_pending_math_expression = false;
+      return;
+    }
+    if (!AppendMathParagraph(document, body, pending_math_expression)) {
+      AppendTextParagraph(document, body, pending_math_expression);
+    }
+    pending_math_expression.clear();
+    has_pending_math_expression = false;
+  };
+
+  const auto flush_pending_title = [&]() {
+    if (pending_title_lines.empty()) {
+      return;
+    }
+    AppendTitleParagraph(document, body, pending_title_lines);
+    pending_title_lines.clear();
+  };
 
   const auto flush_line = [&]() {
     if (current_line.empty()) {
       return;
     }
     std::vector<const ir::TextSpan*> ordered_line_spans = SortLineSpansForReading(current_line);
+    const double line_baseline = OrderedLineBaseline(ordered_line_spans);
+    const size_t line_index = page_line_index++;
     const std::string line_text = BuildLineText(ordered_line_spans);
     const MathLineCandidate math_line = BuildMathLinearText(ordered_line_spans);
     current_line.clear();
@@ -1486,12 +2026,34 @@ void AppendPageTextParagraphs(tinyxml2::XMLDocument& document,
       return;
     }
 
-    if (IsLikelyMathLine(line_text, math_line) &&
-        AppendMathParagraph(document, body, math_line.linear_text)) {
+    if (IsLikelyMathLine(line_text, math_line)) {
+      flush_pending_title();
+      if (has_pending_math_expression &&
+          ShouldMergeMathContinuation(pending_math_expression, math_line.linear_text)) {
+        pending_math_expression += " ";
+        pending_math_expression += TrimLeadingWhitespace(math_line.linear_text);
+      } else {
+        flush_pending_math();
+        pending_math_expression = math_line.linear_text;
+        has_pending_math_expression = true;
+      }
       return;
-    } else {
-      AppendTextParagraph(document, body, line_text);
     }
+    flush_pending_math();
+
+    if (IsLikelyTitleLine(page,
+                          line_text,
+                          line_baseline,
+                          line_index,
+                          !pending_title_lines.empty())) {
+      if (pending_title_lines.size() < 2) {
+        pending_title_lines.push_back(line_text);
+        return;
+      }
+    }
+
+    flush_pending_title();
+    AppendTextParagraph(document, body, line_text);
   };
 
   for (const auto& span : page.spans) {
@@ -1575,6 +2137,8 @@ void AppendPageTextParagraphs(tinyxml2::XMLDocument& document,
     has_current_line = true;
   }
   flush_line();
+  flush_pending_math();
+  flush_pending_title();
 }
 
 std::string BuildDocumentXml(const ir::Document& ir_document,

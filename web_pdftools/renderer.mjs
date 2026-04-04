@@ -16,6 +16,15 @@ const previewCanvasWrapEl = document.getElementById('preview-canvas-wrap');
 const previewCanvasEl = document.getElementById('pdf-canvas');
 const previewPageLabelEl = document.getElementById('preview-page-label');
 const previewZoomLabelEl = document.getElementById('preview-zoom-label');
+const settingsModalEl = document.getElementById('settings-modal');
+const settingsThemeModeEl = document.getElementById('settings-theme-mode');
+const settingsSaveEl = document.getElementById('settings-save');
+const settingsCancelEl = document.getElementById('settings-cancel');
+const settingsCloseEl = document.getElementById('settings-close');
+
+const themeStorageKey = 'web_pdftools.theme.mode';
+const themeModes = new Set(['dark', 'light', 'system']);
+const systemDarkMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
 
 const tabSelectors = [
   'merge-tab-select',
@@ -40,6 +49,7 @@ const previewTabs = [];
 let activeTabId = null;
 let running = false;
 let renderToken = 0;
+let activeThemeMode = 'dark';
 
 function now() {
   return new Date().toLocaleTimeString();
@@ -53,6 +63,119 @@ function appendLog(message) {
     logEl.textContent = line;
   }
   logEl.scrollTop = logEl.scrollHeight;
+}
+
+function normalizeThemeMode(mode) {
+  return themeModes.has(mode) ? mode : 'dark';
+}
+
+function resolveTheme(mode) {
+  if (mode === 'system') {
+    return systemDarkMediaQuery.matches ? 'dark' : 'light';
+  }
+  return mode;
+}
+
+function applyThemeMode(mode, { persist = true, log = true } = {}) {
+  const normalizedMode = normalizeThemeMode(mode);
+  const resolvedTheme = resolveTheme(normalizedMode);
+  activeThemeMode = normalizedMode;
+
+  document.documentElement.setAttribute('data-theme-mode', normalizedMode);
+  document.documentElement.setAttribute('data-theme', resolvedTheme);
+
+  if (settingsThemeModeEl) {
+    settingsThemeModeEl.value = normalizedMode;
+  }
+
+  if (persist) {
+    try {
+      window.localStorage.setItem(themeStorageKey, normalizedMode);
+    } catch (_error) {
+      // no-op
+    }
+  }
+
+  if (log) {
+    appendLog(`主题切换: ${normalizedMode} (${resolvedTheme})`);
+  }
+}
+
+function openThemeSettings() {
+  if (!settingsModalEl) {
+    appendLog('Theme Settings UI 未找到。');
+    return;
+  }
+
+  settingsThemeModeEl.value = activeThemeMode;
+  settingsModalEl.classList.add('open');
+  settingsModalEl.setAttribute('aria-hidden', 'false');
+  document.body.classList.add('modal-open');
+}
+
+function closeThemeSettings() {
+  if (!settingsModalEl) {
+    return;
+  }
+  settingsModalEl.classList.remove('open');
+  settingsModalEl.setAttribute('aria-hidden', 'true');
+  document.body.classList.remove('modal-open');
+}
+
+function initThemeSettings() {
+  let initialMode = 'dark';
+  try {
+    initialMode = normalizeThemeMode(window.localStorage.getItem(themeStorageKey));
+  } catch (_error) {
+    // no-op
+  }
+
+  applyThemeMode(initialMode, { persist: false, log: false });
+
+  if (typeof systemDarkMediaQuery.addEventListener === 'function') {
+    systemDarkMediaQuery.addEventListener('change', () => {
+      if (activeThemeMode === 'system') {
+        applyThemeMode('system', { persist: false, log: true });
+      }
+    });
+  } else if (typeof systemDarkMediaQuery.addListener === 'function') {
+    systemDarkMediaQuery.addListener(() => {
+      if (activeThemeMode === 'system') {
+        applyThemeMode('system', { persist: false, log: true });
+      }
+    });
+  }
+}
+
+function bindThemeSettings() {
+  if (!settingsModalEl || !settingsThemeModeEl || !settingsSaveEl || !settingsCancelEl || !settingsCloseEl) {
+    return;
+  }
+
+  settingsSaveEl.addEventListener('click', () => {
+    applyThemeMode(settingsThemeModeEl.value, { persist: true, log: true });
+    closeThemeSettings();
+  });
+
+  settingsCancelEl.addEventListener('click', () => {
+    closeThemeSettings();
+  });
+
+  settingsCloseEl.addEventListener('click', () => {
+    closeThemeSettings();
+  });
+
+  settingsModalEl.addEventListener('click', (event) => {
+    if (event.target === settingsModalEl) {
+      closeThemeSettings();
+    }
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && settingsModalEl.classList.contains('open')) {
+      closeThemeSettings();
+    }
+  });
 }
 
 function setButtonsDisabled(disabled) {
@@ -455,6 +578,11 @@ function bindNativeMenuBar() {
 
     if (action === 'close-all-tabs') {
       closeAllTabs();
+      return;
+    }
+
+    if (action === 'open-theme-settings') {
+      openThemeSettings();
     }
   });
 }
@@ -769,6 +897,7 @@ function bindPdf2Docx() {
 }
 
 function bootstrap() {
+  initThemeSettings();
   appendLog('UI 已初始化。');
   initStatus().catch((error) => {
     statusEl.className = 'status error';
@@ -777,6 +906,7 @@ function bootstrap() {
   });
 
   bindNativeMenuBar();
+  bindThemeSettings();
   bindPreviewToolbar();
   bindTabSelectors();
 

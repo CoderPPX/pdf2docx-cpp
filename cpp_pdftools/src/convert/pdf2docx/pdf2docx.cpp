@@ -4,6 +4,7 @@
 
 #include "pdf2docx/converter.hpp"
 #include "pdf2docx/ir_json.hpp"
+#include "pdftools/error_handling.hpp"
 
 namespace pdftools::convert {
 
@@ -74,40 +75,46 @@ Status ConvertPdfToDocx(const PdfToDocxRequest& request, PdfToDocxResult* result
     }
   }
 
-  pdf2docx::Converter converter(pdf2docx::BackendKind::kPoDoFo);
-  pdf2docx::ConvertOptions options;
-  options.extract_images = request.extract_images;
-  options.enable_font_fallback = request.enable_font_fallback;
-  options.docx_use_anchored_images = request.use_anchored_images;
+  return GuardStatus(
+      [&]() -> Status {
+        pdf2docx::Converter converter(pdf2docx::BackendKind::kPoDoFo);
+        pdf2docx::ConvertOptions options;
+        options.extract_images = request.extract_images;
+        options.enable_font_fallback = request.enable_font_fallback;
+        options.docx_use_anchored_images = request.use_anchored_images;
 
-  pdf2docx::ConvertStats stats;
-  pdf2docx::ir::Document ir_doc;
-  pdf2docx::ir::Document* maybe_ir = request.dump_ir_json_path.empty() ? nullptr : &ir_doc;
+        pdf2docx::ConvertStats stats;
+        pdf2docx::ir::Document ir_doc;
+        pdf2docx::ir::Document* maybe_ir = request.dump_ir_json_path.empty() ? nullptr : &ir_doc;
 
-  pdf2docx::Status convert_status = converter.ConvertFile(request.input_pdf, request.output_docx, options, &stats, maybe_ir);
-  Status mapped_status = MapLegacyStatus(convert_status);
-  if (!mapped_status.ok()) {
-    return mapped_status;
-  }
+        pdf2docx::Status convert_status =
+            converter.ConvertFile(request.input_pdf, request.output_docx, options, &stats, maybe_ir);
+        Status mapped_status = MapLegacyStatus(convert_status);
+        if (!mapped_status.ok()) {
+          return mapped_status;
+        }
 
-  if (!request.dump_ir_json_path.empty()) {
-    pdf2docx::Status dump_status = pdf2docx::WriteIrToJson(ir_doc, request.dump_ir_json_path);
-    mapped_status = MapLegacyStatus(dump_status);
-    if (!mapped_status.ok()) {
-      return mapped_status;
-    }
-  }
+        if (!request.dump_ir_json_path.empty()) {
+          pdf2docx::Status dump_status = pdf2docx::WriteIrToJson(ir_doc, request.dump_ir_json_path);
+          mapped_status = MapLegacyStatus(dump_status);
+          if (!mapped_status.ok()) {
+            return mapped_status;
+          }
+        }
 
-  result->page_count = stats.page_count;
-  result->image_count = stats.image_count;
-  result->warning_count = stats.warning_count;
-  result->extracted_image_count = stats.extracted_image_count;
-  result->skipped_image_count = stats.skipped_image_count;
-  result->elapsed_ms = stats.elapsed_ms;
-  result->backend = stats.backend;
+        result->page_count = stats.page_count;
+        result->image_count = stats.image_count;
+        result->warning_count = stats.warning_count;
+        result->extracted_image_count = stats.extracted_image_count;
+        result->skipped_image_count = stats.skipped_image_count;
+        result->elapsed_ms = stats.elapsed_ms;
+        result->backend = stats.backend;
 
-  return Status::Ok();
+        return Status::Ok();
+      },
+      ErrorCode::kInternalError,
+      "pdf2docx conversion raised an exception",
+      request.input_pdf);
 }
 
 }  // namespace pdftools::convert
-

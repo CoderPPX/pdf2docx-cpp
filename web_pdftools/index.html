@@ -217,6 +217,31 @@
       </section>
     </main>
 
+    <div id="settings-modal" class="settings-modal" aria-hidden="true">
+      <div class="settings-panel card" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <div class="settings-head">
+          <h2 id="settings-title">Theme Settings</h2>
+          <button id="settings-close" type="button" class="settings-close-btn" aria-label="Close settings">
+            ×
+          </button>
+        </div>
+
+        <div class="field">
+          <label for="settings-theme-mode">Theme</label>
+          <select id="settings-theme-mode">
+            <option value="dark">Dark</option>
+            <option value="light">Light</option>
+            <option value="system">System</option>
+          </select>
+        </div>
+
+        <div class="row settings-actions">
+          <button id="settings-cancel" type="button">Cancel</button>
+          <button id="settings-save" type="button" class="primary">Save</button>
+        </div>
+      </div>
+    </div>
+
     <script type="module" src="./renderer.mjs"></script>
   </body>
 </html>

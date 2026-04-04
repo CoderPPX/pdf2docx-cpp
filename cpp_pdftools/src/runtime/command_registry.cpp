@@ -1,4 +1,5 @@
 #include "pdftools/runtime.hpp"
+#include "pdftools/error_handling.hpp"
 
 namespace pdftools {
 
@@ -37,8 +38,11 @@ Status CommandRegistry::Execute(const std::string& operation_id,
     return Status::Error(ErrorCode::kCancelled, "operation cancelled before start", operation_id);
   }
 
-  return handler->Handle(request, result, context);
+  return GuardStatus(
+      [&]() -> Status { return handler->Handle(request, result, context); },
+      ErrorCode::kInternalError,
+      "command handler raised an exception",
+      operation_id);
 }
 
 }  // namespace pdftools
-

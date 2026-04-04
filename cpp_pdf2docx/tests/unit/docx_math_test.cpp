@@ -209,6 +209,39 @@ int main() {
       pdf2docx::ir::TextSpan{.text = "A ∩ B = {x | x ∈ A}", .x = 80.0, .y = 640.0, .length = 88.0, .has_bbox = true, .bbox = {80.0, 638.0, 88.0, 12.0}});
 
   page.spans.push_back(
+      pdf2docx::ir::TextSpan{.text = "f(x) = x + 1", .x = 80.0, .y = 602.0, .length = 56.0, .has_bbox = true, .bbox = {80.0, 600.0, 56.0, 12.0}});
+  page.spans.push_back(
+      pdf2docx::ir::TextSpan{.text = "= 2x + 1", .x = 88.0, .y = 590.0, .length = 48.0, .has_bbox = true, .bbox = {88.0, 588.0, 48.0, 12.0}});
+
+  page.spans.push_back(
+      pdf2docx::ir::TextSpan{.text = "a + b = c", .x = 80.0, .y = 572.0, .length = 48.0, .has_bbox = true, .bbox = {80.0, 570.0, 48.0, 12.0}});
+  page.spans.push_back(
+      pdf2docx::ir::TextSpan{.text = "2", .x = 85.0, .y = 578.0, .length = 6.0, .has_bbox = true, .bbox = {85.0, 578.0, 6.0, 8.0}});
+  page.spans.push_back(
+      pdf2docx::ir::TextSpan{.text = "2", .x = 101.0, .y = 578.0, .length = 6.0, .has_bbox = true, .bbox = {101.0, 578.0, 6.0, 8.0}});
+  page.spans.push_back(
+      pdf2docx::ir::TextSpan{.text = "2", .x = 123.0, .y = 578.0, .length = 6.0, .has_bbox = true, .bbox = {123.0, 578.0, 6.0, 8.0}});
+
+  page.spans.push_back(
+      pdf2docx::ir::TextSpan{.text = "∫", .x = 80.0, .y = 528.0, .length = 8.0, .has_bbox = true, .bbox = {80.0, 526.0, 8.0, 12.0}});
+  page.spans.push_back(
+      pdf2docx::ir::TextSpan{.text = "0", .x = 88.0, .y = 522.0, .length = 6.0, .has_bbox = true, .bbox = {88.0, 522.0, 6.0, 8.0}});
+  page.spans.push_back(
+      pdf2docx::ir::TextSpan{.text = "1", .x = 88.0, .y = 534.0, .length = 6.0, .has_bbox = true, .bbox = {88.0, 534.0, 6.0, 8.0}});
+  page.spans.push_back(
+      pdf2docx::ir::TextSpan{.text = "x", .x = 98.0, .y = 528.0, .length = 8.0, .has_bbox = true, .bbox = {98.0, 526.0, 8.0, 12.0}});
+  page.spans.push_back(
+      pdf2docx::ir::TextSpan{.text = "2", .x = 107.0, .y = 534.0, .length = 6.0, .has_bbox = true, .bbox = {107.0, 534.0, 6.0, 8.0}});
+  page.spans.push_back(
+      pdf2docx::ir::TextSpan{.text = "dx", .x = 115.0, .y = 528.0, .length = 14.0, .has_bbox = true, .bbox = {115.0, 526.0, 14.0, 12.0}});
+  page.spans.push_back(
+      pdf2docx::ir::TextSpan{.text = "=", .x = 132.0, .y = 528.0, .length = 8.0, .has_bbox = true, .bbox = {132.0, 526.0, 8.0, 12.0}});
+  page.spans.push_back(
+      pdf2docx::ir::TextSpan{.text = "1", .x = 143.0, .y = 534.0, .length = 6.0, .has_bbox = true, .bbox = {143.0, 534.0, 6.0, 8.0}});
+  page.spans.push_back(
+      pdf2docx::ir::TextSpan{.text = "3", .x = 143.0, .y = 522.0, .length = 6.0, .has_bbox = true, .bbox = {143.0, 522.0, 6.0, 8.0}});
+
+  page.spans.push_back(
       pdf2docx::ir::TextSpan{.text = "Normal", .x = 80.0, .y = 620.0, .length = 30.0, .has_bbox = true, .bbox = {80.0, 618.0, 30.0, 12.0}});
   page.spans.push_back(pdf2docx::ir::TextSpan{
       .text = "paragraph",
@@ -258,10 +291,13 @@ int main() {
   if (document_xml.find("<m:oMathPara") == std::string::npos) {
     return EXIT_FAILURE;
   }
-  if (CountSubstring(document_xml, "<m:oMathPara") != 3) {
+  if (CountSubstring(document_xml, "<m:oMathPara") != 6) {
     return EXIT_FAILURE;
   }
-  if (document_xml.find("<m:sSup") == std::string::npos) {
+  if (CountSubstring(document_xml, "<m:sSup") < 3) {
+    return EXIT_FAILURE;
+  }
+  if (document_xml.find("<m:sSubSup") == std::string::npos) {
     return EXIT_FAILURE;
   }
   if (document_xml.find("<m:sSub") == std::string::npos) {
