@@ -6,9 +6,11 @@
 #include <cmath>
 #include <cstdint>
 #include <fstream>
+#include <limits>
 #include <set>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #if PDF2DOCX_HAS_TINYXML2
@@ -392,14 +394,89 @@ bool IsLeftAttachedBracket(char ch) {
   }
 }
 
-std::string BuildLineText(const std::vector<const ir::TextSpan*>& line_spans) {
+bool ContainsAnySubstring(const std::string& text,
+                          const std::initializer_list<const char*>& tokens);
+
+bool ContainsMathSymbol(const std::string& text) {
+  return ContainsAnySubstring(
+      text,
+      {"∑", "∫", "√", "≤", "≥", "≈", "≠", "∞", "±", "×", "÷", "∀", "∃", "∈", "∩", "∪", "→", "↦", "∂"});
+}
+
+double SpanBaselineY(const ir::TextSpan& span) {
+  if (span.y > 0.0) {
+    return span.y;
+  }
+  if (span.has_bbox) {
+    return span.bbox.y;
+  }
+  return SpanLineY(span);
+}
+
+double SpanHeight(const ir::TextSpan& span) {
+  if (span.has_bbox && span.bbox.height > 0.0) {
+    return span.bbox.height;
+  }
+  return 12.0;
+}
+
+template <typename T>
+double MedianValue(std::vector<T> values) {
+  if (values.empty()) {
+    return 0.0;
+  }
+  std::sort(values.begin(), values.end());
+  const size_t middle = values.size() / 2;
+  if (values.size() % 2 == 1) {
+    return static_cast<double>(values[middle]);
+  }
+  return 0.5 * (static_cast<double>(values[middle - 1]) + static_cast<double>(values[middle]));
+}
+
+std::vector<const ir::TextSpan*> SortLineSpansForReading(const std::vector<const ir::TextSpan*>& line_spans) {
+  std::vector<const ir::TextSpan*> ordered = line_spans;
+  if (ordered.size() <= 1) {
+    return ordered;
+  }
+
+  std::vector<double> baselines;
+  baselines.reserve(ordered.size());
+  for (const auto* span : ordered) {
+    if (span == nullptr) {
+      continue;
+    }
+    baselines.push_back(SpanBaselineY(*span));
+  }
+  const double line_baseline = MedianValue(std::move(baselines));
+
+  std::stable_sort(ordered.begin(), ordered.end(), [line_baseline](const ir::TextSpan* lhs, const ir::TextSpan* rhs) {
+    if (lhs == nullptr || rhs == nullptr) {
+      return lhs < rhs;
+    }
+    const double lhs_left = SpanLeftX(*lhs);
+    const double rhs_left = SpanLeftX(*rhs);
+    if (std::fabs(lhs_left - rhs_left) > 0.5) {
+      return lhs_left < rhs_left;
+    }
+
+    const double lhs_baseline_distance = std::fabs(SpanBaselineY(*lhs) - line_baseline);
+    const double rhs_baseline_distance = std::fabs(SpanBaselineY(*rhs) - line_baseline);
+    if (std::fabs(lhs_baseline_distance - rhs_baseline_distance) > 0.2) {
+      return lhs_baseline_distance < rhs_baseline_distance;
+    }
+    return SpanBaselineY(*lhs) > SpanBaselineY(*rhs);
+  });
+  return ordered;
+}
+
+std::string BuildLineText(const std::vector<const ir::TextSpan*>& ordered_line_spans) {
   std::string line_text;
   const ir::TextSpan* previous = nullptr;
-  for (const auto* span : line_spans) {
+  for (const auto* span : ordered_line_spans) {
     if (span == nullptr || span->text.empty()) {
       continue;
     }
-    if (previous != nullptr) {
+    if (previous != nullptr && !line_text.empty()) {
       const double gap_pt = SpanLeftX(*span) - SpanRightX(*previous);
       const bool need_space =
           gap_pt > 1.0 &&
@@ -417,57 +494,1084 @@ std::string BuildLineText(const std::vector<const ir::TextSpan*>& line_spans) {
   return line_text;
 }
 
+enum class SpanScriptRole {
+  kNormal,
+  kSuperscript,
+  kSubscript,
+};
+
+SpanScriptRole DetectScriptRole(const ir::TextSpan& span, double line_baseline, double script_threshold) {
+  const double baseline = SpanBaselineY(span);
+  if (baseline > line_baseline + script_threshold) {
+    return SpanScriptRole::kSuperscript;
+  }
+  if (baseline < line_baseline - script_threshold) {
+    return SpanScriptRole::kSubscript;
+  }
+  return SpanScriptRole::kNormal;
+}
+
+struct MathLineCandidate {
+  std::string linear_text;
+  bool has_script = false;
+};
+
+bool IsScriptLikeSpan(const ir::TextSpan& span) {
+  if (span.text.empty()) {
+    return false;
+  }
+  double effective_height = SpanHeight(span);
+  if (span.has_bbox && span.bbox.height <= 0.0) {
+    effective_height = 8.0;
+  }
+  if (effective_height > 10.0) {
+    return false;
+  }
+  if (span.text.size() > 3) {
+    return false;
+  }
+  for (unsigned char ch : span.text) {
+    if (ch >= 128) {
+      return false;
+    }
+    if (!std::isalnum(ch) && ch != '+' && ch != '-' && ch != '=' && ch != '(' && ch != ')' && ch != ',') {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool SpanHasAsciiAlnum(const ir::TextSpan& span) {
+  for (unsigned char ch : span.text) {
+    if (ch < 128 && std::isalnum(ch)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool IsBaselineAnchorSpan(const ir::TextSpan& span) {
+  if (span.text.empty()) {
+    return false;
+  }
+  if (IsScriptLikeSpan(span)) {
+    return false;
+  }
+  if (SpanHasAsciiAlnum(span)) {
+    return true;
+  }
+  if (ContainsMathSymbol(span.text)) {
+    return false;
+  }
+  int punctuation_count = 0;
+  for (unsigned char ch : span.text) {
+    if (ch >= 128) {
+      continue;
+    }
+    if (std::isalnum(ch)) {
+      return true;
+    }
+    if (std::ispunct(ch)) {
+      ++punctuation_count;
+    }
+  }
+  return punctuation_count == 0;
+}
+
+struct LineEnvelope {
+  double left = 0.0;
+  double right = 0.0;
+  bool has_any = false;
+  bool has_math_symbol = false;
+  int token_count = 0;
+  int script_like_count = 0;
+  int non_script_count = 0;
+};
+
+LineEnvelope ComputeLineEnvelope(const std::vector<const ir::TextSpan*>& line_spans) {
+  LineEnvelope envelope;
+  for (const auto* span : line_spans) {
+    if (span == nullptr || span->text.empty()) {
+      continue;
+    }
+    const double left = SpanLeftX(*span);
+    const double right = SpanRightX(*span);
+    if (!envelope.has_any) {
+      envelope.left = left;
+      envelope.right = right;
+      envelope.has_any = true;
+    } else {
+      envelope.left = std::min(envelope.left, left);
+      envelope.right = std::max(envelope.right, right);
+    }
+    ++envelope.token_count;
+    if (IsScriptLikeSpan(*span)) {
+      ++envelope.script_like_count;
+    } else {
+      ++envelope.non_script_count;
+    }
+    if (ContainsMathSymbol(span->text)) {
+      envelope.has_math_symbol = true;
+    }
+  }
+  return envelope;
+}
+
+double HorizontalGapToEnvelope(const LineEnvelope& envelope, const ir::TextSpan& span) {
+  if (!envelope.has_any) {
+    return std::numeric_limits<double>::infinity();
+  }
+  const double left = SpanLeftX(span);
+  const double right = SpanRightX(span);
+  if (right < envelope.left) {
+    return envelope.left - right;
+  }
+  if (left > envelope.right) {
+    return left - envelope.right;
+  }
+  return 0.0;
+}
+
+double ComputeLineBaseline(const std::vector<const ir::TextSpan*>& line_spans) {
+  std::vector<double> normal_baselines;
+  std::vector<double> all_baselines;
+  normal_baselines.reserve(line_spans.size());
+  all_baselines.reserve(line_spans.size());
+  for (const auto* span : line_spans) {
+    if (span == nullptr || span->text.empty()) {
+      continue;
+    }
+    const double baseline = SpanBaselineY(*span);
+    all_baselines.push_back(baseline);
+    if (!IsScriptLikeSpan(*span)) {
+      normal_baselines.push_back(baseline);
+    }
+  }
+  if (!normal_baselines.empty()) {
+    return MedianValue(std::move(normal_baselines));
+  }
+  return MedianValue(std::move(all_baselines));
+}
+
+bool LooksMathToken(const std::string& text) {
+  if (text.empty()) {
+    return false;
+  }
+  if (ContainsMathSymbol(text)) {
+    return true;
+  }
+  if (ContainsAnySubstring(text, {"α", "β", "γ", "δ", "θ", "λ", "μ", "π", "σ", "ω", "Ω", "Δ"})) {
+    return true;
+  }
+  if (text == "lim" ||
+      ContainsAnySubstring(text, {"lim(", "lim_", "lim ", "sin(", "cos(", "tan(", "log(", "ln("})) {
+    return true;
+  }
+
+  int operator_count = 0;
+  int digit_count = 0;
+  int alpha_count = 0;
+  for (unsigned char ch : text) {
+    if (ch < 128 && std::isdigit(ch)) {
+      ++digit_count;
+    } else if (ch < 128 && std::isalpha(ch)) {
+      ++alpha_count;
+    }
+    switch (ch) {
+      case '=':
+      case '+':
+      case '*':
+      case '/':
+      case '^':
+      case '_':
+      case '<':
+      case '>':
+        ++operator_count;
+        break;
+      default:
+        break;
+    }
+  }
+  if (operator_count == 0) {
+    return false;
+  }
+  if (operator_count >= 2) {
+    return true;
+  }
+  if (digit_count > 0 || alpha_count > 0) {
+    return true;
+  }
+  if (text.size() == 1 && std::string("=+*/<>").find(text.front()) != std::string::npos) {
+    return true;
+  }
+  return false;
+}
+
+MathLineCandidate BuildMathLinearText(const std::vector<const ir::TextSpan*>& ordered_line_spans) {
+  MathLineCandidate candidate;
+  if (ordered_line_spans.empty()) {
+    return candidate;
+  }
+
+  std::vector<double> anchor_baselines;
+  std::vector<double> baselines;
+  std::vector<double> heights;
+  anchor_baselines.reserve(ordered_line_spans.size());
+  baselines.reserve(ordered_line_spans.size());
+  heights.reserve(ordered_line_spans.size());
+  for (const auto* span : ordered_line_spans) {
+    if (span == nullptr) {
+      continue;
+    }
+    const double span_baseline = SpanBaselineY(*span);
+    baselines.push_back(span_baseline);
+    if (IsBaselineAnchorSpan(*span)) {
+      anchor_baselines.push_back(span_baseline);
+    }
+    heights.push_back(SpanHeight(*span));
+  }
+  const double line_baseline = !anchor_baselines.empty()
+                                   ? MedianValue(std::move(anchor_baselines))
+                                   : MedianValue(std::move(baselines));
+  const double median_height = std::max(6.0, MedianValue(std::move(heights)));
+  const double script_threshold = std::max(1.8, median_height * 0.28);
+
+  const ir::TextSpan* previous = nullptr;
+  SpanScriptRole previous_role = SpanScriptRole::kNormal;
+  for (const auto* span : ordered_line_spans) {
+    if (span == nullptr || span->text.empty()) {
+      continue;
+    }
+
+    SpanScriptRole role = DetectScriptRole(*span, line_baseline, script_threshold);
+    if (candidate.linear_text.empty()) {
+      role = SpanScriptRole::kNormal;
+    }
+    if (role != SpanScriptRole::kNormal) {
+      candidate.has_script = true;
+    }
+
+    if (role == SpanScriptRole::kNormal) {
+      if (previous != nullptr && !candidate.linear_text.empty()) {
+        const double gap_pt = SpanLeftX(*span) - SpanRightX(*previous);
+        const bool need_space =
+            gap_pt > 1.0 &&
+            !std::isspace(static_cast<unsigned char>(candidate.linear_text.back())) &&
+            !std::isspace(static_cast<unsigned char>(span->text.front())) &&
+            !IsRightAttachedPunctuation(span->text.front()) &&
+            !IsLeftAttachedBracket(candidate.linear_text.back()) &&
+            previous_role == SpanScriptRole::kNormal;
+        if (need_space) {
+          candidate.linear_text.push_back(' ');
+        }
+      }
+      candidate.linear_text += span->text;
+    } else {
+      while (!candidate.linear_text.empty() &&
+             std::isspace(static_cast<unsigned char>(candidate.linear_text.back()))) {
+        candidate.linear_text.pop_back();
+      }
+      candidate.linear_text += (role == SpanScriptRole::kSuperscript) ? "^" : "_";
+      candidate.linear_text += span->text;
+    }
+
+    previous = span;
+    previous_role = role;
+  }
+  return candidate;
+}
+
+bool ContainsAnySubstring(const std::string& text,
+                          const std::initializer_list<const char*>& tokens) {
+  for (const char* token : tokens) {
+    if (token != nullptr && text.find(token) != std::string::npos) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool IsLikelyMathLine(const std::string& plain_text, const MathLineCandidate& candidate) {
+  if (candidate.linear_text.empty()) {
+    return false;
+  }
+  const std::string& text = candidate.linear_text;
+  const bool has_unicode_math_symbol = ContainsMathSymbol(text);
+  const bool has_greek_symbol =
+      ContainsAnySubstring(text, {"α", "β", "γ", "δ", "θ", "λ", "μ", "π", "σ", "ω", "Ω", "Δ"});
+
+  int operator_count = 0;
+  int digit_count = 0;
+  int alpha_count = 0;
+  for (unsigned char ch : text) {
+    if (ch < 128 && std::isdigit(ch)) {
+      ++digit_count;
+    }
+    if (ch < 128 && std::isalpha(ch)) {
+      ++alpha_count;
+    }
+    switch (ch) {
+      case '=':
+      case '+':
+      case '-':
+      case '*':
+      case '/':
+      case '^':
+      case '_':
+      case '<':
+      case '>':
+        ++operator_count;
+        break;
+      default:
+        break;
+    }
+  }
+
+  if (candidate.has_script &&
+      (alpha_count > 0 || has_greek_symbol) &&
+      (digit_count > 0 || operator_count > 0 || has_unicode_math_symbol)) {
+    return true;
+  }
+
+  if (has_unicode_math_symbol && (digit_count > 0 || alpha_count > 0 || has_greek_symbol)) {
+    return true;
+  }
+
+  if (has_unicode_math_symbol && text.size() <= 96) {
+    return true;
+  }
+
+  if ((text.find('=') != std::string::npos) &&
+      (alpha_count >= 2 || has_greek_symbol) &&
+      text.size() <= 64) {
+    return true;
+  }
+
+  if (operator_count >= 1 && digit_count > 0 && alpha_count > 0) {
+    return true;
+  }
+  if (operator_count >= 2 && digit_count > 0) {
+    return true;
+  }
+  if ((text.find('/') != std::string::npos || text.find("÷") != std::string::npos) &&
+      (digit_count > 0 || alpha_count > 0 || has_greek_symbol) &&
+      text.size() <= 40) {
+    return true;
+  }
+  if (ContainsAnySubstring(text, {"sin(", "cos(", "tan(", "log(", "ln(", "lim"})) {
+    return true;
+  }
+
+  if (plain_text.size() > 140 && operator_count <= 1) {
+    return false;
+  }
+  return false;
+}
+
+enum class MathNodeKind {
+  kToken,
+  kRow,
+  kFraction,
+  kSup,
+  kSub,
+  kSubSup,
+};
+
+struct MathNode {
+  MathNodeKind kind = MathNodeKind::kToken;
+  std::string text;
+  std::vector<MathNode> children;
+};
+
+MathNode MakeTokenNode(std::string text) {
+  MathNode node;
+  node.kind = MathNodeKind::kToken;
+  node.text = std::move(text);
+  return node;
+}
+
+MathNode MakeRowNode(std::vector<MathNode> children) {
+  MathNode node;
+  node.kind = MathNodeKind::kRow;
+  node.children = std::move(children);
+  return node;
+}
+
+MathNode MakeFractionNode(MathNode numerator, MathNode denominator) {
+  MathNode node;
+  node.kind = MathNodeKind::kFraction;
+  node.children.push_back(std::move(numerator));
+  node.children.push_back(std::move(denominator));
+  return node;
+}
+
+MathNode MakeSupNode(MathNode base, MathNode superscript) {
+  MathNode node;
+  node.kind = MathNodeKind::kSup;
+  node.children.push_back(std::move(base));
+  node.children.push_back(std::move(superscript));
+  return node;
+}
+
+MathNode MakeSubNode(MathNode base, MathNode subscript) {
+  MathNode node;
+  node.kind = MathNodeKind::kSub;
+  node.children.push_back(std::move(base));
+  node.children.push_back(std::move(subscript));
+  return node;
+}
+
+MathNode MakeSubSupNode(MathNode base, MathNode subscript, MathNode superscript) {
+  MathNode node;
+  node.kind = MathNodeKind::kSubSup;
+  node.children.push_back(std::move(base));
+  node.children.push_back(std::move(subscript));
+  node.children.push_back(std::move(superscript));
+  return node;
+}
+
+MathNode MergeWithOperator(MathNode lhs, const std::string& op, MathNode rhs) {
+  std::vector<MathNode> children;
+  if (lhs.kind == MathNodeKind::kRow) {
+    children = std::move(lhs.children);
+  } else {
+    children.push_back(std::move(lhs));
+  }
+  if (!op.empty()) {
+    children.push_back(MakeTokenNode(op));
+  }
+  if (rhs.kind == MathNodeKind::kRow) {
+    for (auto& child : rhs.children) {
+      children.push_back(std::move(child));
+    }
+  } else {
+    children.push_back(std::move(rhs));
+  }
+  return MakeRowNode(std::move(children));
+}
+
+enum class MathTokenType {
+  kText,
+  kOperator,
+  kLParen,
+  kRParen,
+  kEnd,
+};
+
+struct MathToken {
+  MathTokenType type = MathTokenType::kEnd;
+  std::string text;
+};
+
+bool IsMathOperatorToken(const std::string& token) {
+  return token == "+" || token == "-" || token == "−" ||
+         token == "*" || token == "×" || token == "·" ||
+         token == "/" || token == "÷" ||
+         token == "=" || token == "<" || token == ">" ||
+         token == "≤" || token == "≥" || token == "≈" || token == "≠" ||
+         token == "^" || token == "_";
+}
+
+bool TokenHasAsciiAlnum(const std::string& token) {
+  for (unsigned char ch : token) {
+    if (ch < 128 && std::isalnum(ch)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool TokenHasGreekSymbol(const std::string& token) {
+  return ContainsAnySubstring(token, {"α", "β", "γ", "δ", "θ", "λ", "μ", "π", "σ", "ω", "Ω", "Δ"});
+}
+
+size_t Utf8CharLength(unsigned char lead) {
+  if ((lead & 0x80u) == 0u) {
+    return 1;
+  }
+  if ((lead & 0xE0u) == 0xC0u) {
+    return 2;
+  }
+  if ((lead & 0xF0u) == 0xE0u) {
+    return 3;
+  }
+  if ((lead & 0xF8u) == 0xF0u) {
+    return 4;
+  }
+  return 1;
+}
+
+std::vector<MathToken> TokenizeMathLinearText(const std::string& text) {
+  std::vector<MathToken> tokens;
+  size_t index = 0;
+  while (index < text.size()) {
+    const unsigned char ch = static_cast<unsigned char>(text[index]);
+    if (std::isspace(ch)) {
+      ++index;
+      continue;
+    }
+
+    if ((ch & 0x80u) != 0u) {
+      const size_t codepoint_len = std::min(Utf8CharLength(ch), text.size() - index);
+      std::string token_text = text.substr(index, codepoint_len);
+      MathToken token;
+      token.type = IsMathOperatorToken(token_text) ? MathTokenType::kOperator : MathTokenType::kText;
+      token.text = std::move(token_text);
+      tokens.push_back(std::move(token));
+      index += codepoint_len;
+      continue;
+    }
+
+    if (std::isalnum(ch) || ch == '.') {
+      size_t end = index + 1;
+      while (end < text.size()) {
+        const unsigned char next = static_cast<unsigned char>(text[end]);
+        if (!std::isalnum(next) && next != '.') {
+          break;
+        }
+        ++end;
+      }
+      tokens.push_back(MathToken{
+          .type = MathTokenType::kText,
+          .text = text.substr(index, end - index),
+      });
+      index = end;
+      continue;
+    }
+
+    const char ascii = static_cast<char>(ch);
+    if (ascii == '(' || ascii == '[' || ascii == '{') {
+      tokens.push_back(MathToken{
+          .type = MathTokenType::kLParen,
+          .text = "(",
+      });
+      ++index;
+      continue;
+    }
+    if (ascii == ')' || ascii == ']' || ascii == '}') {
+      tokens.push_back(MathToken{
+          .type = MathTokenType::kRParen,
+          .text = ")",
+      });
+      ++index;
+      continue;
+    }
+
+    std::string token_text(1, ascii);
+    tokens.push_back(MathToken{
+        .type = IsMathOperatorToken(token_text) ? MathTokenType::kOperator : MathTokenType::kText,
+        .text = std::move(token_text),
+    });
+    ++index;
+  }
+
+  tokens.push_back(MathToken{
+      .type = MathTokenType::kEnd,
+      .text = "",
+  });
+  return tokens;
+}
+
+class MathExpressionParser {
+ public:
+  explicit MathExpressionParser(std::vector<MathToken> tokens) : tokens_(std::move(tokens)) {}
+
+  MathNode Parse() {
+    MathNode parsed = ParseExpression();
+    std::vector<MathNode> row;
+    const auto append_node = [&row](MathNode node) {
+      if (node.kind == MathNodeKind::kToken && node.text.empty()) {
+        return;
+      }
+      if (node.kind == MathNodeKind::kRow) {
+        for (auto& child : node.children) {
+          if (child.kind == MathNodeKind::kToken && child.text.empty()) {
+            continue;
+          }
+          row.push_back(std::move(child));
+        }
+        return;
+      }
+      row.push_back(std::move(node));
+    };
+    append_node(std::move(parsed));
+
+    while (Peek().type != MathTokenType::kEnd) {
+      if (Peek().type == MathTokenType::kLParen) {
+        Consume();
+        row.push_back(MakeTokenNode("("));
+        continue;
+      }
+      if (Peek().type == MathTokenType::kRParen) {
+        Consume();
+        row.push_back(MakeTokenNode(")"));
+        continue;
+      }
+      row.push_back(MakeTokenNode(Consume().text));
+    }
+
+    if (row.empty()) {
+      return MakeTokenNode("0");
+    }
+    if (row.size() == 1) {
+      return std::move(row.front());
+    }
+    return MakeRowNode(std::move(row));
+  }
+
+ private:
+  const MathToken& Peek() const {
+    return tokens_[cursor_];
+  }
+
+  const MathToken& Consume() {
+    const size_t current = cursor_;
+    if (cursor_ + 1 < tokens_.size()) {
+      ++cursor_;
+    }
+    return tokens_[current];
+  }
+
+  bool Match(MathTokenType type, const std::string& text = "") {
+    if (Peek().type != type) {
+      return false;
+    }
+    if (!text.empty() && Peek().text != text) {
+      return false;
+    }
+    Consume();
+    return true;
+  }
+
+  bool MatchOperator(const std::initializer_list<const char*>& values, std::string* matched_value = nullptr) {
+    if (Peek().type != MathTokenType::kOperator) {
+      return false;
+    }
+    for (const char* value : values) {
+      if (value != nullptr && Peek().text == value) {
+        if (matched_value != nullptr) {
+          *matched_value = Peek().text;
+        }
+        Consume();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  MathNode ParseExpression() {
+    MathNode node = ParseTerm();
+    std::string op;
+    while (MatchOperator({"+", "-", "−", "=", "<", ">", "≤", "≥", "≈", "≠"}, &op)) {
+      MathNode rhs = ParseTerm();
+      node = MergeWithOperator(std::move(node), op, std::move(rhs));
+    }
+    return node;
+  }
+
+  MathNode ParseTerm() {
+    MathNode node = ParsePostfix();
+    std::string op;
+    while (MatchOperator({"*", "×", "·", "/", "÷"}, &op)) {
+      MathNode rhs = ParsePostfix();
+      if (op == "/" || op == "÷") {
+        node = MakeFractionNode(std::move(node), std::move(rhs));
+      } else {
+        node = MergeWithOperator(std::move(node), op, std::move(rhs));
+      }
+    }
+    return node;
+  }
+
+  MathNode ParsePostfix() {
+    MathNode node = ParsePrimary();
+    while (true) {
+      if (Match(MathTokenType::kOperator, "^")) {
+        MathNode script = ParsePrimary();
+        if (node.kind == MathNodeKind::kSub && node.children.size() == 2) {
+          node = MakeSubSupNode(std::move(node.children[0]), std::move(node.children[1]), std::move(script));
+        } else {
+          node = MakeSupNode(std::move(node), std::move(script));
+        }
+        continue;
+      }
+      if (Match(MathTokenType::kOperator, "_")) {
+        MathNode script = ParsePrimary();
+        if (node.kind == MathNodeKind::kSup && node.children.size() == 2) {
+          node = MakeSubSupNode(std::move(node.children[0]), std::move(script), std::move(node.children[1]));
+        } else {
+          node = MakeSubNode(std::move(node), std::move(script));
+        }
+        continue;
+      }
+      break;
+    }
+    return node;
+  }
+
+  MathNode ParsePrimary() {
+    if (Match(MathTokenType::kLParen)) {
+      MathNode inner = ParseExpression();
+      const bool has_closing = Match(MathTokenType::kRParen);
+      std::vector<MathNode> grouped;
+      grouped.push_back(MakeTokenNode("("));
+      grouped.push_back(std::move(inner));
+      if (has_closing) {
+        grouped.push_back(MakeTokenNode(")"));
+      }
+      return MakeRowNode(std::move(grouped));
+    }
+
+    if (Peek().type == MathTokenType::kOperator &&
+        (Peek().text == "+" || Peek().text == "-" || Peek().text == "−")) {
+      const std::string unary = Consume().text;
+      MathNode rhs = ParsePrimary();
+      return MergeWithOperator(MakeTokenNode(unary), "", std::move(rhs));
+    }
+
+    if (Peek().type == MathTokenType::kText || Peek().type == MathTokenType::kOperator) {
+      return MakeTokenNode(Consume().text);
+    }
+
+    if (Peek().type == MathTokenType::kRParen) {
+      return MakeTokenNode(Consume().text);
+    }
+
+    return MakeTokenNode("");
+  }
+
+  std::vector<MathToken> tokens_;
+  size_t cursor_ = 0;
+};
+
+void AppendMathNode(tinyxml2::XMLDocument& document,
+                    tinyxml2::XMLElement* parent,
+                    const MathNode& node) {
+  if (parent == nullptr) {
+    return;
+  }
+
+  switch (node.kind) {
+    case MathNodeKind::kToken: {
+      if (node.text.empty()) {
+        return;
+      }
+      auto* run = document.NewElement("m:r");
+      auto* text = document.NewElement("m:t");
+      text->SetText(node.text.c_str());
+      run->InsertEndChild(text);
+      parent->InsertEndChild(run);
+      return;
+    }
+    case MathNodeKind::kRow: {
+      for (const auto& child : node.children) {
+        AppendMathNode(document, parent, child);
+      }
+      return;
+    }
+    case MathNodeKind::kFraction: {
+      if (node.children.size() != 2) {
+        return;
+      }
+      auto* fraction = document.NewElement("m:f");
+      parent->InsertEndChild(fraction);
+      auto* numerator = document.NewElement("m:num");
+      fraction->InsertEndChild(numerator);
+      AppendMathNode(document, numerator, node.children[0]);
+      auto* denominator = document.NewElement("m:den");
+      fraction->InsertEndChild(denominator);
+      AppendMathNode(document, denominator, node.children[1]);
+      return;
+    }
+    case MathNodeKind::kSup: {
+      if (node.children.size() != 2) {
+        return;
+      }
+      auto* sup = document.NewElement("m:sSup");
+      parent->InsertEndChild(sup);
+      auto* base = document.NewElement("m:e");
+      sup->InsertEndChild(base);
+      AppendMathNode(document, base, node.children[0]);
+      auto* superscript = document.NewElement("m:sup");
+      sup->InsertEndChild(superscript);
+      AppendMathNode(document, superscript, node.children[1]);
+      return;
+    }
+    case MathNodeKind::kSub: {
+      if (node.children.size() != 2) {
+        return;
+      }
+      auto* sub = document.NewElement("m:sSub");
+      parent->InsertEndChild(sub);
+      auto* base = document.NewElement("m:e");
+      sub->InsertEndChild(base);
+      AppendMathNode(document, base, node.children[0]);
+      auto* subscript = document.NewElement("m:sub");
+      sub->InsertEndChild(subscript);
+      AppendMathNode(document, subscript, node.children[1]);
+      return;
+    }
+    case MathNodeKind::kSubSup: {
+      if (node.children.size() != 3) {
+        return;
+      }
+      auto* sub_sup = document.NewElement("m:sSubSup");
+      parent->InsertEndChild(sub_sup);
+      auto* base = document.NewElement("m:e");
+      sub_sup->InsertEndChild(base);
+      AppendMathNode(document, base, node.children[0]);
+      auto* subscript = document.NewElement("m:sub");
+      sub_sup->InsertEndChild(subscript);
+      AppendMathNode(document, subscript, node.children[1]);
+      auto* superscript = document.NewElement("m:sup");
+      sub_sup->InsertEndChild(superscript);
+      AppendMathNode(document, superscript, node.children[2]);
+      return;
+    }
+  }
+}
+
+struct MathNodeStats {
+  int token_count = 0;
+  int operator_token_count = 0;
+  int ascii_alnum_token_count = 0;
+  int greek_identifier_token_count = 0;
+  bool has_structured_math = false;
+};
+
+bool SubtreeHasMeaningfulIdentifier(const MathNode& node) {
+  if (node.kind == MathNodeKind::kToken) {
+    return TokenHasAsciiAlnum(node.text) || TokenHasGreekSymbol(node.text);
+  }
+  for (const auto& child : node.children) {
+    if (SubtreeHasMeaningfulIdentifier(child)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void CollectMathNodeStats(const MathNode& node, MathNodeStats* stats) {
+  if (stats == nullptr) {
+    return;
+  }
+
+  switch (node.kind) {
+    case MathNodeKind::kFraction:
+      if (node.children.size() == 2 &&
+          SubtreeHasMeaningfulIdentifier(node.children[0]) &&
+          SubtreeHasMeaningfulIdentifier(node.children[1])) {
+        stats->has_structured_math = true;
+      }
+      break;
+    case MathNodeKind::kSup:
+    case MathNodeKind::kSub:
+      if (node.children.size() == 2 &&
+          SubtreeHasMeaningfulIdentifier(node.children[0]) &&
+          SubtreeHasMeaningfulIdentifier(node.children[1])) {
+        stats->has_structured_math = true;
+      }
+      break;
+    case MathNodeKind::kSubSup:
+      if (node.children.size() == 3 &&
+          SubtreeHasMeaningfulIdentifier(node.children[0]) &&
+          SubtreeHasMeaningfulIdentifier(node.children[1]) &&
+          SubtreeHasMeaningfulIdentifier(node.children[2])) {
+        stats->has_structured_math = true;
+      }
+      break;
+    default:
+      break;
+  }
+
+  if (node.kind == MathNodeKind::kToken) {
+    if (node.text.empty()) {
+      return;
+    }
+    ++stats->token_count;
+    if (IsMathOperatorToken(node.text)) {
+      ++stats->operator_token_count;
+    }
+    if (TokenHasAsciiAlnum(node.text)) {
+      ++stats->ascii_alnum_token_count;
+    }
+    if (TokenHasGreekSymbol(node.text)) {
+      ++stats->greek_identifier_token_count;
+    }
+    return;
+  }
+
+  for (const auto& child : node.children) {
+    CollectMathNodeStats(child, stats);
+  }
+}
+
+void AppendTextParagraph(tinyxml2::XMLDocument& document,
+                         tinyxml2::XMLElement* body,
+                         const std::string& line_text) {
+  if (line_text.empty()) {
+    return;
+  }
+  auto* paragraph = document.NewElement("w:p");
+  body->InsertEndChild(paragraph);
+  AppendTightParagraphProperties(document, paragraph);
+
+  auto* run = document.NewElement("w:r");
+  paragraph->InsertEndChild(run);
+
+  auto* text = document.NewElement("w:t");
+  text->SetText(line_text.c_str());
+  run->InsertEndChild(text);
+}
+
+bool AppendMathParagraph(tinyxml2::XMLDocument& document,
+                         tinyxml2::XMLElement* body,
+                         const std::string& linear_expression) {
+  if (linear_expression.empty()) {
+    return false;
+  }
+
+  MathExpressionParser parser(TokenizeMathLinearText(linear_expression));
+  MathNode parsed = parser.Parse();
+  MathNodeStats stats;
+  CollectMathNodeStats(parsed, &stats);
+  const int identifier_token_count = stats.ascii_alnum_token_count + stats.greek_identifier_token_count;
+  const bool has_unicode_math_symbol = ContainsMathSymbol(linear_expression);
+  const bool should_emit_math =
+      stats.has_structured_math ||
+      (stats.operator_token_count > 0 && identifier_token_count >= 2) ||
+      (stats.operator_token_count > 0 && identifier_token_count >= 1 && has_unicode_math_symbol) ||
+      (has_unicode_math_symbol && identifier_token_count >= 1);
+  if (!should_emit_math) {
+    return false;
+  }
+
+  auto* paragraph = document.NewElement("w:p");
+  body->InsertEndChild(paragraph);
+  AppendTightParagraphProperties(document, paragraph);
+
+  auto* math_paragraph = document.NewElement("m:oMathPara");
+  paragraph->InsertEndChild(math_paragraph);
+  auto* math = document.NewElement("m:oMath");
+  math_paragraph->InsertEndChild(math);
+  AppendMathNode(document, math, parsed);
+  return true;
+}
+
 void AppendPageTextParagraphs(tinyxml2::XMLDocument& document,
                               tinyxml2::XMLElement* body,
                               const ir::Page& page) {
-  constexpr double kLineTolerancePt = 2.0;
+  constexpr double kLineTolerancePt = 3.0;
+  constexpr double kScriptAttachTolerancePt = 9.0;
+  constexpr double kLooseScriptAttachTolerancePt = 20.0;
+  constexpr double kScriptAttachMinGapPt = -2.0;
+  constexpr double kScriptAttachMaxGapPt = 8.0;
+  constexpr double kMathEnvelopeAttachMaxGapPt = 48.0;
+  constexpr double kMathEnvelopeLooseGapPt = 24.0;
   std::vector<const ir::TextSpan*> current_line;
-  double current_line_y = 0.0;
+  double current_line_baseline = 0.0;
   bool has_current_line = false;
 
   const auto flush_line = [&]() {
     if (current_line.empty()) {
       return;
     }
-    const std::string line_text = BuildLineText(current_line);
+    std::vector<const ir::TextSpan*> ordered_line_spans = SortLineSpansForReading(current_line);
+    const std::string line_text = BuildLineText(ordered_line_spans);
+    const MathLineCandidate math_line = BuildMathLinearText(ordered_line_spans);
     current_line.clear();
     has_current_line = false;
+
     if (line_text.empty()) {
       return;
     }
 
-    auto* paragraph = document.NewElement("w:p");
-    body->InsertEndChild(paragraph);
-    AppendTightParagraphProperties(document, paragraph);
-
-    auto* run = document.NewElement("w:r");
-    paragraph->InsertEndChild(run);
-
-    auto* text = document.NewElement("w:t");
-    text->SetText(line_text.c_str());
-    run->InsertEndChild(text);
+    if (IsLikelyMathLine(line_text, math_line) &&
+        AppendMathParagraph(document, body, math_line.linear_text)) {
+      return;
+    } else {
+      AppendTextParagraph(document, body, line_text);
+    }
   };
 
   for (const auto& span : page.spans) {
     if (span.text.empty()) {
       continue;
     }
-    const double span_line_y = SpanLineY(span);
+    const double span_baseline = SpanBaselineY(span);
     if (!has_current_line) {
       current_line.push_back(&span);
-      current_line_y = span_line_y;
+      current_line_baseline = span_baseline;
       has_current_line = true;
       continue;
     }
 
-    if (std::fabs(current_line_y - span_line_y) <= kLineTolerancePt) {
+    const LineEnvelope current_envelope = ComputeLineEnvelope(current_line);
+    const bool span_script_like = IsScriptLikeSpan(span);
+    const bool span_math_like = LooksMathToken(span.text);
+    const bool line_script_stub =
+        current_envelope.script_like_count > 0 &&
+        current_envelope.non_script_count == 0 &&
+        current_envelope.token_count <= 2;
+    const bool line_math_like =
+        current_envelope.has_math_symbol ||
+        current_envelope.script_like_count >= 2;
+
+    bool same_line = std::fabs(current_line_baseline - span_baseline) <= kLineTolerancePt;
+    if (!same_line && !current_line.empty()) {
+      const auto* previous = current_line.back();
+      if (previous != nullptr) {
+        const double previous_baseline = SpanBaselineY(*previous);
+        const double baseline_delta = std::fabs(previous_baseline - span_baseline);
+        const double gap_pt = SpanLeftX(span) - SpanRightX(*previous);
+        const bool close_glyph_attachment =
+            baseline_delta <= kScriptAttachTolerancePt &&
+            gap_pt >= kScriptAttachMinGapPt &&
+            gap_pt <= kScriptAttachMaxGapPt;
+        same_line = close_glyph_attachment;
+      }
+    }
+
+    if (!same_line && current_envelope.has_any) {
+      const double baseline_delta = std::fabs(current_line_baseline - span_baseline);
+      const double envelope_gap = HorizontalGapToEnvelope(current_envelope, span);
+      if (baseline_delta <= kScriptAttachTolerancePt &&
+          envelope_gap <= kMathEnvelopeAttachMaxGapPt &&
+          (line_math_like || span_script_like || span_math_like)) {
+        same_line = true;
+      }
+      if (!same_line &&
+          baseline_delta <= kLooseScriptAttachTolerancePt &&
+          envelope_gap <= kMathEnvelopeAttachMaxGapPt &&
+          span_script_like &&
+          (line_math_like || span_math_like)) {
+        same_line = true;
+      }
+      if (!same_line &&
+          baseline_delta <= kLooseScriptAttachTolerancePt &&
+          envelope_gap <= kMathEnvelopeLooseGapPt &&
+          line_math_like &&
+          span_math_like) {
+        same_line = true;
+      }
+      if (!same_line &&
+          baseline_delta <= kScriptAttachTolerancePt &&
+          envelope_gap <= kMathEnvelopeLooseGapPt &&
+          line_script_stub &&
+          (span_script_like || span_math_like)) {
+        same_line = true;
+      }
+    }
+
+    if (same_line) {
       current_line.push_back(&span);
+      current_line_baseline = ComputeLineBaseline(current_line);
       continue;
     }
 
     flush_line();
     current_line.push_back(&span);
-    current_line_y = span_line_y;
+    current_line_baseline = span_baseline;
     has_current_line = true;
   }
   flush_line();
@@ -483,6 +1587,7 @@ std::string BuildDocumentXml(const ir::Document& ir_document,
   auto* root = document.NewElement("w:document");
   root->SetAttribute("xmlns:w", "http://schemas.openxmlformats.org/wordprocessingml/2006/main");
   root->SetAttribute("xmlns:r", "http://schemas.openxmlformats.org/officeDocument/2006/relationships");
+  root->SetAttribute("xmlns:m", "http://schemas.openxmlformats.org/officeDocument/2006/math");
   root->SetAttribute("xmlns:wp", "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing");
   root->SetAttribute("xmlns:a", "http://schemas.openxmlformats.org/drawingml/2006/main");
   root->SetAttribute("xmlns:pic", "http://schemas.openxmlformats.org/drawingml/2006/picture");

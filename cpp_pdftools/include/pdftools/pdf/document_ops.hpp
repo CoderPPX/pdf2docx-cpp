@@ -20,6 +20,16 @@ struct MergePdfResult {
 
 Status MergePdf(const MergePdfRequest& request, MergePdfResult* result);
 
+struct PdfInfoRequest {
+  std::string input_pdf;
+};
+
+struct PdfInfoResult {
+  uint32_t page_count = 0;
+};
+
+Status GetPdfInfo(const PdfInfoRequest& request, PdfInfoResult* result);
+
 struct DeletePageRequest {
   std::string input_pdf;
   std::string output_pdf;
@@ -64,4 +74,3 @@ struct ReplacePageResult {
 Status ReplacePage(const ReplacePageRequest& request, ReplacePageResult* result);
 
 }  // namespace pdftools::pdf
-

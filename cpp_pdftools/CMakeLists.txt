@@ -14,11 +14,11 @@ option(PDFTOOLS_STRICT_DEPS "Fail configure when required dependencies are missi
 option(PDFTOOLS_ENABLE_TESTS "Enable tests" ON)
 option(PDFTOOLS_ENABLE_CLI "Enable CLI tool" ON)
 
-set(PDFTOOLS_THIRDPARTY_ROOT "${CMAKE_SOURCE_DIR}/../thirdparty" CACHE PATH "Path to third-party dependencies")
+set(PDFTOOLS_THIRDPARTY_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../thirdparty" CACHE PATH "Path to third-party dependencies")
 set(PDF2DOCX_XML_BACKEND "tinyxml2" CACHE STRING "tinyxml2|libxml2")
 set(PDF2DOCX_PDF_BACKEND "podofo" CACHE STRING "podofo|poppler")
 
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(Dependencies)
 find_package(Threads REQUIRED)
 
@@ -45,10 +45,10 @@ add_library(pdftools_pdf2docx_legacy STATIC ${PDFTOOLS_LEGACY_SOURCES})
 add_library(pdftools::pdf2docx_legacy ALIAS pdftools_pdf2docx_legacy)
 target_include_directories(pdftools_pdf2docx_legacy
   PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
   PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/legacy_pdf2docx
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/legacy_pdf2docx
 )
 target_compile_definitions(pdftools_pdf2docx_legacy
   PUBLIC
@@ -74,8 +74,8 @@ if(PDF2DOCX_FREETYPE_TARGET)
 endif()
 if(PDF2DOCX_PODOFO_TARGET)
   target_link_libraries(pdftools_pdf2docx_legacy PRIVATE ${PDF2DOCX_PODOFO_TARGET})
-  if(EXISTS "${CMAKE_BINARY_DIR}/_deps/podofo/src/podofo/podofo/auxiliary")
-    target_include_directories(pdftools_pdf2docx_legacy PRIVATE "${CMAKE_BINARY_DIR}/_deps/podofo/src/podofo/podofo/auxiliary")
+  if(EXISTS "${CMAKE_CURRENT_BINARY_DIR}/_deps/podofo/src/podofo/podofo/auxiliary")
+    target_include_directories(pdftools_pdf2docx_legacy PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/_deps/podofo/src/podofo/podofo/auxiliary")
   endif()
 endif()
 
@@ -92,7 +92,7 @@ add_library(pdftools_core STATIC
 add_library(pdftools::core ALIAS pdftools_core)
 target_include_directories(pdftools_core
   PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 target_link_libraries(pdftools_core
@@ -102,8 +102,8 @@ target_link_libraries(pdftools_core
 )
 if(PDF2DOCX_PODOFO_TARGET)
   target_link_libraries(pdftools_core PRIVATE ${PDF2DOCX_PODOFO_TARGET})
-  if(EXISTS "${CMAKE_BINARY_DIR}/_deps/podofo/src/podofo/podofo/auxiliary")
-    target_include_directories(pdftools_core PRIVATE "${CMAKE_BINARY_DIR}/_deps/podofo/src/podofo/podofo/auxiliary")
+  if(EXISTS "${CMAKE_CURRENT_BINARY_DIR}/_deps/podofo/src/podofo/podofo/auxiliary")
+    target_include_directories(pdftools_core PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/_deps/podofo/src/podofo/podofo/auxiliary")
   endif()
 endif()
 
@@ -115,22 +115,22 @@ endif()
 if(PDFTOOLS_ENABLE_TESTS)
   include(CTest)
   if(BUILD_TESTING)
-    set(PDFTOOLS_TEST_PDF "${CMAKE_SOURCE_DIR}/../cpp_pdf2docx/build/test.pdf")
+    set(PDFTOOLS_TEST_PDF "${CMAKE_CURRENT_SOURCE_DIR}/../cpp_pdf2docx/build/test.pdf")
     if(NOT EXISTS "${PDFTOOLS_TEST_PDF}")
-      set(PDFTOOLS_TEST_PDF "${CMAKE_SOURCE_DIR}/../cpp_pdf2docx/build/text.pdf")
+      set(PDFTOOLS_TEST_PDF "${CMAKE_CURRENT_SOURCE_DIR}/../cpp_pdf2docx/build/text.pdf")
     endif()
     if(NOT EXISTS "${PDFTOOLS_TEST_PDF}")
-      set(PDFTOOLS_TEST_PDF "${CMAKE_SOURCE_DIR}/../cpp_pdf2docx/build/image.pdf")
+      set(PDFTOOLS_TEST_PDF "${CMAKE_CURRENT_SOURCE_DIR}/../cpp_pdf2docx/build/image.pdf")
     endif()
 
-    set(PDFTOOLS_TEST_ALT_PDF "${CMAKE_SOURCE_DIR}/../cpp_pdf2docx/build/image.pdf")
+    set(PDFTOOLS_TEST_ALT_PDF "${CMAKE_CURRENT_SOURCE_DIR}/../cpp_pdf2docx/build/image.pdf")
     if(NOT EXISTS "${PDFTOOLS_TEST_ALT_PDF}")
       set(PDFTOOLS_TEST_ALT_PDF "${PDFTOOLS_TEST_PDF}")
     endif()
 
-    set(PDFTOOLS_TEST_IMAGE_TEXT_PDF "${CMAKE_SOURCE_DIR}/../cpp_pdf2docx/build/test-image-text.pdf")
+    set(PDFTOOLS_TEST_IMAGE_TEXT_PDF "${CMAKE_CURRENT_SOURCE_DIR}/../cpp_pdf2docx/build/test-image-text.pdf")
     if(NOT EXISTS "${PDFTOOLS_TEST_IMAGE_TEXT_PDF}")
-      set(PDFTOOLS_TEST_IMAGE_TEXT_PDF "${CMAKE_SOURCE_DIR}/../cpp_pdf2docx/build/image-text.pdf")
+      set(PDFTOOLS_TEST_IMAGE_TEXT_PDF "${CMAKE_CURRENT_SOURCE_DIR}/../cpp_pdf2docx/build/image-text.pdf")
     endif()
     if(NOT EXISTS "${PDFTOOLS_TEST_IMAGE_TEXT_PDF}")
       set(PDFTOOLS_TEST_IMAGE_TEXT_PDF "${PDFTOOLS_TEST_PDF}")
@@ -154,8 +154,8 @@ if(PDFTOOLS_ENABLE_TESTS)
     target_link_libraries(pdftools_m2_document_ops_test PRIVATE pdftools::core)
     if(PDF2DOCX_PODOFO_TARGET)
       target_link_libraries(pdftools_m2_document_ops_test PRIVATE ${PDF2DOCX_PODOFO_TARGET})
-      if(EXISTS "${CMAKE_BINARY_DIR}/_deps/podofo/src/podofo/podofo/auxiliary")
-        target_include_directories(pdftools_m2_document_ops_test PRIVATE "${CMAKE_BINARY_DIR}/_deps/podofo/src/podofo/podofo/auxiliary")
+      if(EXISTS "${CMAKE_CURRENT_BINARY_DIR}/_deps/podofo/src/podofo/podofo/auxiliary")
+        target_include_directories(pdftools_m2_document_ops_test PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/_deps/podofo/src/podofo/podofo/auxiliary")
       endif()
     endif()
     target_compile_definitions(pdftools_m2_document_ops_test PRIVATE
@@ -167,8 +167,8 @@ if(PDFTOOLS_ENABLE_TESTS)
     target_link_libraries(pdftools_m3_extract_ops_test PRIVATE pdftools::core)
     if(PDF2DOCX_PODOFO_TARGET)
       target_link_libraries(pdftools_m3_extract_ops_test PRIVATE ${PDF2DOCX_PODOFO_TARGET})
-      if(EXISTS "${CMAKE_BINARY_DIR}/_deps/podofo/src/podofo/podofo/auxiliary")
-        target_include_directories(pdftools_m3_extract_ops_test PRIVATE "${CMAKE_BINARY_DIR}/_deps/podofo/src/podofo/podofo/auxiliary")
+      if(EXISTS "${CMAKE_CURRENT_BINARY_DIR}/_deps/podofo/src/podofo/podofo/auxiliary")
+        target_include_directories(pdftools_m3_extract_ops_test PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/_deps/podofo/src/podofo/podofo/auxiliary")
       endif()
     endif()
     target_compile_definitions(pdftools_m3_extract_ops_test PRIVATE
@@ -179,8 +179,8 @@ if(PDFTOOLS_ENABLE_TESTS)
     target_link_libraries(pdftools_m4_create_ops_test PRIVATE pdftools::core)
     if(PDF2DOCX_PODOFO_TARGET)
       target_link_libraries(pdftools_m4_create_ops_test PRIVATE ${PDF2DOCX_PODOFO_TARGET})
-      if(EXISTS "${CMAKE_BINARY_DIR}/_deps/podofo/src/podofo/podofo/auxiliary")
-        target_include_directories(pdftools_m4_create_ops_test PRIVATE "${CMAKE_BINARY_DIR}/_deps/podofo/src/podofo/podofo/auxiliary")
+      if(EXISTS "${CMAKE_CURRENT_BINARY_DIR}/_deps/podofo/src/podofo/podofo/auxiliary")
+        target_include_directories(pdftools_m4_create_ops_test PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/_deps/podofo/src/podofo/podofo/auxiliary")
       endif()
     endif()
     add_test(NAME pdftools_m4_create_ops_test COMMAND pdftools_m4_create_ops_test)

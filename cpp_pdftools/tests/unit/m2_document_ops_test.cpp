@@ -36,6 +36,24 @@ int main() {
     return EXIT_FAILURE;
   }
 
+  pdftools::pdf::PdfInfoRequest info_request;
+  info_request.input_pdf = fixture_pdf.string();
+  pdftools::pdf::PdfInfoResult info_result;
+  auto status = pdftools::pdf::GetPdfInfo(info_request, &info_result);
+  if (!status.ok()) {
+    return EXIT_FAILURE;
+  }
+  if (info_result.page_count != fixture_pages) {
+    return EXIT_FAILURE;
+  }
+
+  pdftools::pdf::PdfInfoRequest invalid_info_request;
+  invalid_info_request.input_pdf = (fs::temp_directory_path() / "missing_fixture_for_info_test.pdf").string();
+  status = pdftools::pdf::GetPdfInfo(invalid_info_request, &info_result);
+  if (status.ok() || status.code() != pdftools::ErrorCode::kNotFound) {
+    return EXIT_FAILURE;
+  }
+
   const fs::path out_dir = fs::temp_directory_path() / "pdftools_m2_test";
   fs::create_directories(out_dir);
   const fs::path merged_pdf = out_dir / "merged.pdf";
@@ -48,7 +66,7 @@ int main() {
   merge_request.output_pdf = merged_pdf.string();
   merge_request.overwrite = true;
   pdftools::pdf::MergePdfResult merge_result;
-  auto status = pdftools::pdf::MergePdf(merge_request, &merge_result);
+  status = pdftools::pdf::MergePdf(merge_request, &merge_result);
   if (!status.ok()) {
     return EXIT_FAILURE;
   }
@@ -109,4 +127,3 @@ int main() {
   return EXIT_SUCCESS;
 #endif
 }
-

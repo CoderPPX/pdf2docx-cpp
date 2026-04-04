@@ -1,0 +1,17 @@
+{
+  "name": "web-pdftools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Electron web UI for cpp_pdftools",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "lint:node": "node --check main.js && node --check preload.js && node --check renderer.mjs"
+  },
+  "dependencies": {
+    "pdfjs-dist": "^5.4.394"
+  },
+  "devDependencies": {
+    "electron": "^36.0.0"
+  }
+}

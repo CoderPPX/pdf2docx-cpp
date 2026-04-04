@@ -55,6 +55,16 @@ int main() {
     return EXIT_FAILURE;
   }
 
+  {
+    std::vector<std::string> args = {"pdftools", "pdf", "info", "--input", fixture_pdf.string()};
+    if (pdftools::RunCli(args, out, err) != 0) {
+      return EXIT_FAILURE;
+    }
+  }
+  if (out.str().find("pdf info pages=") == std::string::npos) {
+    return EXIT_FAILURE;
+  }
+
   const fs::path strict_text_out = out_dir / "cli_text_strict.txt";
   fs::remove(strict_text_out, ec);
   {

@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Web PDFTools</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-inner">
+          <section class="tool-group">
+            <div class="card status-card">
+              <h3>运行状态</h3>
+              <div id="binary-status" class="status pending">检测中...</div>
+            </div>
+          </section>
+
+          <section class="tool-group">
+            <h2>PDF 编辑</h2>
+
+            <div class="card">
+              <h3>合并 PDF</h3>
+              <div class="row">
+                <button id="merge-select-inputs" type="button">选择输入</button>
+                <button id="merge-select-output" type="button">选择输出</button>
+                <button id="merge-run" type="button" class="primary">执行</button>
+              </div>
+              <div class="field">
+                <label>从已打开 Tab 选择（可多选）</label>
+                <select id="merge-tab-select" multiple size="4"></select>
+                <button id="merge-use-selected-tabs" type="button">使用所选 Tab 填充输入</button>
+              </div>
+              <div class="field">
+                <label>输入文件（每行一个）</label>
+                <textarea id="merge-inputs" rows="3" placeholder="/path/a.pdf&#10;/path/b.pdf"></textarea>
+              </div>
+              <div class="field">
+                <label>输出文件</label>
+                <input id="merge-output" type="text" placeholder="/path/to/output.pdf" />
+              </div>
+            </div>
+
+            <div class="card">
+              <h3>删除页</h3>
+              <div class="row">
+                <button id="delete-select-input" type="button">选择输入</button>
+                <button id="delete-select-output" type="button">选择输出</button>
+                <button id="delete-run" type="button" class="primary">执行</button>
+              </div>
+              <div class="field">
+                <label>从已打开 Tab 选择输入</label>
+                <select id="delete-input-tab"></select>
+              </div>
+              <div class="field">
+                <label>输入 PDF</label>
+                <input id="delete-input" type="text" />
+              </div>
+              <div class="field">
+                <label>输出 PDF</label>
+                <input id="delete-output" type="text" />
+              </div>
+              <div class="field">
+                <label>页码（1-based）</label>
+                <input id="delete-page" type="number" min="1" value="1" />
+              </div>
+            </div>
+
+            <div class="card">
+              <h3>插入页</h3>
+              <div class="row">
+                <button id="insert-select-target" type="button">目标 PDF</button>
+                <button id="insert-select-source" type="button">来源 PDF</button>
+                <button id="insert-select-output" type="button">选择输出</button>
+                <button id="insert-run" type="button" class="primary">执行</button>
+              </div>
+              <div class="field">
+                <label>从已打开 Tab 选择目标</label>
+                <select id="insert-target-tab"></select>
+              </div>
+              <div class="field">
+                <label>目标 PDF</label>
+                <input id="insert-target" type="text" />
+              </div>
+              <div class="field">
+                <label>从已打开 Tab 选择来源</label>
+                <select id="insert-source-tab"></select>
+              </div>
+              <div class="field">
+                <label>来源 PDF</label>
+                <input id="insert-source" type="text" />
+              </div>
+              <div class="grid">
+                <div class="field">
+                  <label>输出 PDF</label>
+                  <input id="insert-output" type="text" />
+                </div>
+                <div class="field">
+                  <label>插入位置 at</label>
+                  <input id="insert-at" type="number" min="1" value="1" />
+                </div>
+                <div class="field">
+                  <label>来源页 source-page</label>
+                  <input id="insert-source-page" type="number" min="1" value="1" />
+                </div>
+              </div>
+            </div>
+
+            <div class="card">
+              <h3>替换页</h3>
+              <div class="row">
+                <button id="replace-select-target" type="button">目标 PDF</button>
+                <button id="replace-select-source" type="button">来源 PDF</button>
+                <button id="replace-select-output" type="button">选择输出</button>
+                <button id="replace-run" type="button" class="primary">执行</button>
+              </div>
+              <div class="field">
+                <label>从已打开 Tab 选择目标</label>
+                <select id="replace-target-tab"></select>
+              </div>
+              <div class="field">
+                <label>目标 PDF</label>
+                <input id="replace-target" type="text" />
+              </div>
+              <div class="field">
+                <label>从已打开 Tab 选择来源</label>
+                <select id="replace-source-tab"></select>
+              </div>
+              <div class="field">
+                <label>来源 PDF</label>
+                <input id="replace-source" type="text" />
+              </div>
+              <div class="grid">
+                <div class="field">
+                  <label>输出 PDF</label>
+                  <input id="replace-output" type="text" />
+                </div>
+                <div class="field">
+                  <label>目标页 page</label>
+                  <input id="replace-page" type="number" min="1" value="1" />
+                </div>
+                <div class="field">
+                  <label>来源页 source-page</label>
+                  <input id="replace-source-page" type="number" min="1" value="1" />
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="tool-group">
+            <h2>PDF -> DOCX</h2>
+            <div class="card">
+              <h3>转换</h3>
+              <div class="row">
+                <button id="docx-select-input" type="button">选择输入</button>
+                <button id="docx-select-output" type="button">选择输出</button>
+                <button id="docx-run" type="button" class="primary">执行</button>
+              </div>
+              <div class="field">
+                <label>从已打开 Tab 选择输入</label>
+                <select id="docx-input-tab"></select>
+              </div>
+              <div class="field">
+                <label>输入 PDF</label>
+                <input id="docx-input" type="text" />
+              </div>
+              <div class="field">
+                <label>输出 DOCX</label>
+                <input id="docx-output" type="text" />
+              </div>
+              <div class="field">
+                <label>可选 Dump IR JSON</label>
+                <input id="docx-dump-ir" type="text" placeholder="/path/to/dump.json" />
+              </div>
+              <div class="row checks">
+                <label><input id="docx-no-images" type="checkbox" /> 不提取图片</label>
+                <label><input id="docx-anchored" type="checkbox" /> 锚定图片</label>
+              </div>
+            </div>
+          </section>
+
+          <section class="tool-group logs">
+            <h2>任务日志</h2>
+            <pre id="task-log" class="log"></pre>
+          </section>
+        </div>
+      </aside>
+
+      <section class="workspace">
+        <div id="pdf-tabs" class="tab-strip"></div>
+
+        <div class="preview-stage">
+          <div id="preview-empty" class="preview-empty">
+            <h3>暂无预览</h3>
+            <p>从 File 菜单打开 PDF，或在左侧工具区选择输入文件。</p>
+          </div>
+          <div id="preview-canvas-wrap" class="preview-canvas-wrap">
+            <canvas id="pdf-canvas"></canvas>
+          </div>
+        </div>
+
+        <div class="workspace-foot card">
+          <div class="preview-meta">
+            <h2>PDF 预览</h2>
+            <p id="preview-current">当前未打开 PDF</p>
+          </div>
+          <div class="preview-toolbar">
+            <button id="preview-prev-page" type="button">上一页</button>
+            <span id="preview-page-label" class="chip">0 / 0</span>
+            <button id="preview-next-page" type="button">下一页</button>
+            <button id="preview-zoom-out" type="button">-</button>
+            <span id="preview-zoom-label" class="chip">100%</span>
+            <button id="preview-zoom-in" type="button">+</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="./renderer.mjs"></script>
+  </body>
+</html>

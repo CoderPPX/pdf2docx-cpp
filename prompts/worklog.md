@@ -1040,3 +1040,585 @@ V2 结果摘要：
 2. 退出码说明与常见错误排查
 3. 每个命令的可复现示例（含示例输出）
 4. strict/best-effort 模式说明与注意事项
+
+## Qt6 GUI 方案设计输出
+
+- 记录时间：`2026-04-03 11:55:00 EDT (-0400)`
+
+已新增：
+- `prompts/pdftools-gui-qt6-design-v1.md`
+
+内容覆盖：
+1. GUI 功能范围（P0/P1/P2）
+2. 界面信息架构与每个页面字段级设计
+3. 如何以 In-process 方式调用 `pdftools` 库
+4. Qt6 类设计、任务线程模型、strict/best-effort 策略映射
+5. 测试策略与分阶段落地计划
+
+## Qt6 GUI 实施完成（P0）
+
+- 记录时间：`2026-04-03 13:05:00 EDT (-0400)`
+
+已新增：
+- `prompts/pdftools-gui-qt6-implementation-v1.md`
+
+本次完成：
+1. 新建 `cpp_pdftools_gui`，实现 Qt6 GUI 全架构（主窗口 + 任务中心 + 6 页面）。
+2. 进程内接入 `pdftools::core`（不走 CLI 子进程）。
+3. 新增服务层/任务层/模型层/通用控件层，支持后台异步执行。
+4. 为支持子工程复用，修正 `cpp_pdftools` CMake 路径变量（`CMAKE_CURRENT_SOURCE_DIR/BINARY_DIR`）。
+5. 新增 GUI 测试并通过：`2/2`。
+6. 回归 `cpp_pdftools` 独立构建测试：`7/7` 通过。
+
+验证命令：
+1. `cd cpp_pdftools_gui && cmake --preset linux-debug && cmake --build --preset linux-debug -j8 && ctest --preset linux-debug`
+2. `cd cpp_pdftools && cmake --preset linux-debug && cmake --build --preset linux-debug -j8 && ctest --preset linux-debug`
+
+## Qt6 GUI 继续自检修复（错误自修 + 测试扩展）
+
+- 记录时间：`2026-04-03 13:30:00 EDT (-0400)`
+
+本轮继续完成：
+1. 扩展 GUI 自动化测试覆盖范围：
+   - `pdftools_service_test` 覆盖 `ExtractText / Merge / DeletePage / InsertPage / ReplacePage / ExtractAttachments / ImagesToPdf / PdfToDocx`。
+   - 新增 `task_manager_test`，验证异步提交与完成信号。
+2. 补充 GUI CMake 测试 fixture：
+   - 增加 `PDFTOOLS_GUI_TEST_ALT_PDF_PATH`。
+   - 增加 `PDFTOOLS_GUI_TEST_IMAGE_PATH`（用于 `image2pdf` 用例）。
+3. 持续修正编译与集成细节：
+   - 补全 `TaskCenterWidget` 对 `std::optional` 头文件依赖。
+
+验证结果：
+1. `cpp_pdftools_gui` Debug：`ctest --preset linux-debug` -> `3/3 passed`。
+2. `cpp_pdftools_gui` Release：`ctest --preset linux-release` -> `3/3 passed`。
+3. `cpp_pdftools` 回归：仍保持 `7/7 passed`。
+
+## Qt6 GUI 稳定性修复（TaskManager 内存增长风险）
+
+- 记录时间：`2026-04-03 13:45:00 EDT (-0400)`
+
+本次继续修复：
+1. `TaskManager` 增加已完成任务保留上限（默认 `200`），完成任务会按 FIFO 清理旧记录，避免长期运行任务记录无限增长。
+2. `TaskManager` 构造时若传入空 `service`，自动创建默认 `PdfToolsService` 兜底，防止空指针调用。
+3. 新增/增强测试：
+   - `task_manager_test` 增加空 service 场景覆盖；
+   - `service_test` 维持全链路操作覆盖。
+
+验证结果：
+1. `cpp_pdftools_gui` Debug：`3/3 passed`。
+2. `cpp_pdftools_gui` Release：`3/3 passed`。
+
+## Qt6 GUI 继续迭代（最近参数复用 + 设置层补测）
+
+- 记录时间：`2026-04-03 14:05:00 EDT (-0400)`
+
+本轮继续完成：
+1. `PathPicker` 新增 history completer（suggestions）能力，支持最近路径快速复用。
+2. 6 个业务页面接入最近参数恢复：
+   - 启动时回填最近 input/output 与关键参数；
+   - 提交时持久化当前参数（strict/overwrite/scale/tab 等）。
+3. `SettingsService` 新增 `RecentValue()` 快捷读取接口。
+4. `TaskCenterWidget` 增加 sourceModel 判空保护，避免异常时序下空指针。
+5. 新增测试：`settings_service_test`，验证 recent 去重/上限逻辑。
+
+验证结果：
+1. `cpp_pdftools_gui` Debug：`4/4 passed`。
+2. `cpp_pdftools_gui` Release：`4/4 passed`。
+
+## Qt6 GUI 继续迭代（设置页 + 任务保留策略可配置）
+
+- 记录时间：`2026-04-03 14:25:00 EDT (-0400)`
+
+本轮继续完成：
+1. 新增 `SettingsPage`，接入主导航“设置”页面。
+2. 设置页支持：
+   - 动态配置 `TaskManager` 完成任务保留上限；
+   - 清空 recent 历史；
+   - 重置窗口布局状态。
+3. `TaskManager` 新增接口：
+   - `SetMaxCompletedTasks` / `MaxCompletedTasks` / `RetainedTaskCount`。
+4. `SettingsService` 新增：
+   - `ClearByPrefix` / `AllKeys` / `RemoveKey`。
+5. 扩充测试：
+   - `task_manager_test` 增加保留上限约束场景；
+   - `settings_service_test` 增加前缀清理场景。
+
+验证结果：
+1. `cpp_pdftools_gui` Debug：`4/4 passed`。
+2. `cpp_pdftools_gui` Release：`4/4 passed`。
+
+## Qt6 GUI 继续迭代（任务中心详情面板）
+
+- 记录时间：`2026-04-03 14:40:00 EDT (-0400)`
+
+本轮继续完成：
+1. `TaskCenterWidget` 新增详情面板，展示当前任务的 `summary/detail/output path`。
+2. 列表选择变化时自动刷新详情；任务状态更新（dataChanged）时同步刷新详情。
+3. 任务中心交互排障效率提升，失败任务可在 GUI 内直接查看细节。
+
+验证结果：
+1. `cpp_pdftools_gui` Debug：`4/4 passed`。
+2. `cpp_pdftools_gui` Release：`4/4 passed`。
+
+## Qt6 GUI 继续迭代（UI 交互自动化测试扩展）
+
+- 记录时间：`2026-04-03 14:55:00 EDT (-0400)`
+
+本轮继续完成：
+1. 新增 `task_center_widget_test`，验证任务详情面板随选择更新。
+2. 新增 `settings_page_test`，验证设置页参数应用与 recent 清理。
+3. CTest 统一注入 `QT_QPA_PLATFORM=offscreen`，确保无头 CI 稳定。
+
+验证结果：
+1. `cpp_pdftools_gui` Debug：`6/6 passed`。
+2. `cpp_pdftools_gui` Release：`6/6 passed`。
+
+## Qt6 GUI 继续迭代（Open Output 回退增强）
+
+- 记录时间：`2026-04-03 15:05:00 EDT (-0400)`
+
+本轮继续完成：
+1. 任务中心 `Open Output` 行为增强：
+   - 若输出目标不存在但父目录存在，自动回退打开父目录；
+   - 降低失败任务时“无法打开路径”的阻塞感。
+2. 修复该改动引入的编译问题（补充 `QDir` 头文件）。
+
+验证结果：
+1. `cpp_pdftools_gui` Debug：`6/6 passed`。
+2. `cpp_pdftools_gui` Release：`6/6 passed`。
+
+## Qt6 GUI 继续迭代（任务并发队列 + 错误报告导出）
+
+- 记录时间：`2026-04-04 04:32:18 EDT (-0400)`
+
+本轮继续完成：
+1. `TaskManager` 并发队列能力补齐：
+   - 提交任务初始状态为 `Queued`；
+   - 由 `QFutureWatcher::started` 切换为 `Running`；
+   - 执行改为 `QtConcurrent::run(&thread_pool_, ...)`，支持线程池并发上限控制。
+2. 并发设置接入：
+   - `TaskManager` 增加 `SetMaxConcurrentTasks/MaxConcurrentTasks`；
+   - 设置页新增“最大并发任务数”，并持久化 `settings/max_concurrent_tasks`；
+   - 主窗口启动时读取并发配置。
+3. 任务中心新增“错误报告导出”：
+   - 增加 `Export Report` 按钮；
+   - 支持导出选中任务的 `TaskId/Operation/Status/Summary/Detail/OutputPath` 等关键信息；
+   - 默认输出到应用数据目录下 `task_reports`，可配置导出目录；
+   - 增加 `LastExportedReportPath` 用于测试和后续扩展。
+4. 新增/增强测试：
+   - `task_manager_test`：补充 queued 状态与并发上限配置测试；
+   - `settings_page_test`：补充并发上限持久化验证；
+   - `task_center_widget_test`：新增报告导出落盘与内容断言。
+
+验证结果：
+1. `cpp_pdftools_gui` Debug：`6/6 passed`。
+2. `cpp_pdftools_gui` Release：`6/6 passed`。
+3. `cpp_pdftools` 回归：`7/7 passed`。
+
+## Qt6 GUI 继续迭代（任务历史持久化）
+
+- 记录时间：`2026-04-04 04:44:18 EDT (-0400)`
+
+本轮继续完成：
+1. `SettingsService` 增加任务历史序列化接口：
+   - `WriteTaskHistory(tasks, max_items)`；
+   - `ReadTaskHistory(max_items)`；
+   - `ClearTaskHistory()`。
+2. `TaskItemModel` 增加：
+   - `SnapshotTasks()`；
+   - `ReplaceAllTasks(...)`；
+   支持主窗口在启动/退出时做任务历史恢复与保存。
+3. `MainWindow` 生命周期接入历史持久化：
+   - 启动后调用 `RestoreTaskHistory()`；
+   - 关闭时调用 `SaveTaskHistory()`；
+   - 仅持久化最终态任务（成功/失败），避免重启后出现“卡在运行中”的历史假象。
+4. 增强测试：
+   - `settings_service_test`：覆盖任务历史 round-trip、上限裁剪、清理逻辑；
+   - `task_item_model_test`：覆盖 snapshot + replace 顺序一致性。
+
+验证结果：
+1. `cpp_pdftools_gui` Debug：`6/6 passed`。
+2. `cpp_pdftools_gui` Release：`6/6 passed`。
+3. `cpp_pdftools` 回归：`7/7 passed`。
+
+## Qt6 GUI 继续迭代（历史管理闭环）
+
+- 记录时间：`2026-04-04 04:49:09 EDT (-0400)`
+
+本轮继续完成：
+1. `SettingsPage` 新增“清空任务历史记录”按钮（`clear_task_history_button`）。
+2. 设置页功能从“清空 recent”扩展为：
+   - 清空最近参数/文件历史；
+   - 清空持久化任务历史；
+   - 重置窗口布局状态。
+3. 与任务历史持久化能力组合后形成闭环：
+   - 启动自动恢复；
+   - 退出自动保存；
+   - 用户可随时手动清空。
+4. 扩展 `settings_page_test`：
+   - 验证清空任务历史后 `ReadTaskHistory(...)` 返回空集。
+
+验证结果：
+1. `cpp_pdftools_gui` Debug：`6/6 passed`。
+2. `cpp_pdftools_gui` Release：`6/6 passed`。
+3. `cpp_pdftools` 回归：`7/7 passed`。
+
+## Qt6 GUI 继续迭代（任务中心队列状态过滤）
+
+- 记录时间：`2026-04-04 04:53:29 EDT (-0400)`
+
+本轮继续完成：
+1. 任务中心过滤器新增 `Queued` 状态项。
+2. 过滤器项顺序统一为：
+   - `All` / `Queued` / `Running` / `Succeeded` / `Failed`。
+3. 增强 `task_center_widget_test`：
+   - 验证切换到 `Queued` 过滤后仅显示排队任务。
+
+验证结果：
+1. `cpp_pdftools_gui` Debug：`6/6 passed`。
+2. `cpp_pdftools_gui` Release：`6/6 passed`。
+3. `cpp_pdftools` 回归：`7/7 passed`。
+
+## Qt6 GUI 继续迭代（排队任务取消）
+
+- 记录时间：`2026-04-04 05:30:08 EDT (-0400)`
+
+本轮继续完成：
+1. `TaskManager` 新增 `CancelTask(task_id)`：
+   - 仅允许取消 `Queued` 任务；
+   - 取消后立即切换任务状态为 `Canceled`；
+   - 发出 `TaskChanged/TaskCompleted` 事件并进入完成队列。
+2. `TaskState` 新增 `Canceled` 终态，任务中心可展示可过滤。
+3. 任务中心新增 `Cancel Task` 按钮：
+   - 选中任务后触发取消；
+   - 对非队列任务给出“仅支持取消排队任务”提示。
+4. `task_manager_test` 增加排队取消测试，验证终态与信号行为。
+
+验证结果：
+1. `cpp_pdftools_gui` Debug：`6/6 passed`。
+2. `cpp_pdftools_gui` Release：`6/6 passed`。
+3. `cpp_pdftools` 回归：`7/7 passed`。
+
+## Qt6 GUI 继续迭代（任务历史即时清理）
+
+- 记录时间：`2026-04-04 05:38:44 EDT (-0400)`
+
+本轮继续完成：
+1. `TaskManager` 新增 `ClearRetainedTasks()`，可清理内存中的终态任务记录。
+2. `TaskItemModel` 新增 `RemoveFinalTasks()`，支持任务中心即时移除终态记录。
+3. `SettingsPage` 清空任务历史升级为“持久化 + 内存 + UI”三层联动：
+   - 清空 `QSettings` 中历史；
+   - 调用 `TaskManager::ClearRetainedTasks()`；
+   - 发射 `TaskHistoryCleared` 信号。
+4. `MainWindow` 监听 `TaskHistoryCleared`，触发任务中心即时刷新，无需重启。
+5. 新增/增强测试：
+   - `task_item_model_test`：终态任务清理后仅保留活跃任务；
+   - `task_manager_test`：`ClearRetainedTasks` 清理行为；
+   - `settings_page_test`：`TaskHistoryCleared` 信号触发。
+
+验证结果：
+1. `cpp_pdftools_gui` Debug：`6/6 passed`。
+2. `cpp_pdftools_gui` Release：`6/6 passed`。
+3. `cpp_pdftools` 回归：`7/7 passed`。
+
+## Qt6 GUI 继续迭代（任务中心按钮状态联动）
+
+- 记录时间：`2026-04-04 05:44:30 EDT (-0400)`
+
+本轮继续完成：
+1. 任务中心新增动作状态联动策略：
+   - 无选中任务时 `Cancel/Export/Open` 全禁用；
+   - 有选中任务时 `Export/Open` 启用；
+   - 仅 `Queued` 任务启用 `Cancel`。
+2. 在任务选择变化与模型状态变化（`dataChanged`）时自动刷新动作状态。
+3. 增强 `task_center_widget_test`：
+   - 验证 failed 任务不可取消；
+   - 验证 queued 任务可取消；
+   - 验证无选择时全部动作禁用。
+
+验证结果：
+1. `cpp_pdftools_gui` Debug：`6/6 passed`。
+2. `cpp_pdftools_gui` Release：`6/6 passed`。
+3. `cpp_pdftools` 回归：`7/7 passed`。
+
+## Qt6 GUI 继续迭代（Canceled 过滤回归覆盖）
+
+- 记录时间：`2026-04-04 05:47:51 EDT (-0400)`
+
+本轮继续完成：
+1. `task_center_widget_test` 新增 `Canceled` 状态过滤用例。
+2. 覆盖路径：
+   - 写入 `Canceled + Running` 混合任务；
+   - 切换过滤到 `Canceled`；
+   - 断言仅展示取消任务。
+3. 进一步巩固“排队取消 -> Canceled 可筛选”完整链路。
+
+验证结果：
+1. `cpp_pdftools_gui` Debug：`6/6 passed`。
+2. `cpp_pdftools_gui` Release：`6/6 passed`。
+3. `cpp_pdftools` 回归：`7/7 passed`。
+
+## Qt6 GUI 继续迭代（报告目录设置化）
+
+- 记录时间：`2026-04-04 05:53:50 EDT (-0400)`
+
+本轮继续完成：
+1. 设置页新增“任务报告目录”输入控件（目录模式 `PathPicker`）。
+2. 应用设置时新增：
+   - 持久化 `settings/report_directory`；
+   - 发出 `ReportDirectoryChanged(path)` 信号。
+3. 主窗口接入：
+   - 启动时读取报告目录配置并应用到任务中心；
+   - 监听设置页信号，运行时热更新任务中心报告导出目录。
+4. 顺带修复：
+   - 主窗口任务历史保存的“终态判定”补入 `Canceled`，避免取消任务漏持久化。
+5. 测试补强：
+   - `settings_page_test` 增加报告目录持久化与信号断言。
+
+验证结果：
+1. `cpp_pdftools_gui` Debug：`6/6 passed`。
+2. `cpp_pdftools_gui` Release：`6/6 passed`。
+3. `cpp_pdftools` 回归：`7/7 passed`。
+
+## Qt6 GUI 继续迭代（页面编辑页数预览）
+
+- 记录时间：`2026-04-04 06:31:55 EDT (-0400)`
+
+本轮继续完成：
+1. `cpp_pdftools` 增加 `GetPdfInfo(request, result)`：
+   - 输入：`input_pdf`；
+   - 输出：`page_count`；
+   - 失败场景返回可区分状态（例如不存在文件返回 `kNotFound`）。
+2. `PageEditPage` 增加页数信息可视化：
+   - 输入 PDF 信息标签；
+   - 插入来源 PDF 信息标签；
+   - 替换来源 PDF 信息标签。
+3. 交互行为：
+   - 路径变化时自动刷新信息；
+   - 成功显示 `页数：N`；
+   - 失败显示 `无法读取：...`。
+4. 新增 GUI 测试 `page_edit_page_test`，覆盖有效/无效路径与来源 PDF 信息刷新。
+5. 扩展 `m2_document_ops_test` 覆盖 `GetPdfInfo` 成功与 NotFound 失败分支。
+
+验证结果：
+1. `cpp_pdftools` Debug：`7/7 passed`。
+2. `cpp_pdftools_gui` Debug：`7/7 passed`。
+3. `cpp_pdftools_gui` Release：`7/7 passed`。
+
+## Qt6 GUI 继续迭代（PDF Info CLI 接入）
+
+- 记录时间：`2026-04-04 06:35:38 EDT (-0400)`
+
+本轮继续完成：
+1. `cpp_pdftools` CLI 新增：
+   - `pdftools pdf info --input <in.pdf>`。
+2. 命令输出新增：
+   - `pdf info pages=<N>`。
+3. `m5_cli_test` 增加 `pdf info` 调用与输出断言，确保命令可用。
+
+验证结果：
+1. `cpp_pdftools` Debug：`7/7 passed`。
+2. `cpp_pdftools_gui` Debug：`7/7 passed`。
+3. `cpp_pdftools_gui` Release：`7/7 passed`。
+
+## Qt6 GUI 继续迭代（页号输入范围联动）
+
+- 记录时间：`2026-04-04 06:41:00 EDT (-0400)`
+
+本轮继续完成：
+1. 页面编辑页新增“页号范围联动”：
+   - 目标 PDF 解析成功后，动态限制删除/替换页号和插入位置上限；
+   - 来源 PDF 解析成功后，动态限制来源页号上限。
+2. 无效路径或未选择文件时，自动回退默认上限，保持可编辑。
+3. `page_edit_page_test` 增加范围断言：
+   - `delete/replace <= page_count`；
+   - `insert_at <= page_count + 1`；
+   - `source_page <= source_page_count`。
+
+验证结果：
+1. `cpp_pdftools` Debug：`7/7 passed`。
+2. `cpp_pdftools_gui` Debug：`7/7 passed`。
+3. `cpp_pdftools_gui` Release：`7/7 passed`。
+
+## Qt6 GUI 继续迭代（合并页总页数预估）
+
+- 记录时间：`2026-04-04 06:47:50 EDT (-0400)`
+
+本轮继续完成：
+1. `MergePage` 增加输入摘要标签，实时展示：
+   - 当前选择文件数；
+   - 预计总页数；
+   - 无法读取文件计数（若存在）。
+2. 摘要刷新触发：
+   - 初始加载最近输入后；
+   - 文件列表变更（增删/排序/清空）后。
+3. 新增 `merge_page_test`：
+   - 验证可读 PDF 的总页数聚合；
+   - 验证混入无效路径时“无法读取 N 个”提示。
+
+验证结果：
+1. `cpp_pdftools` Debug：`7/7 passed`。
+2. `cpp_pdftools_gui` Debug：`8/8 passed`。
+3. `cpp_pdftools_gui` Release：`8/8 passed`。
+
+## Qt6 GUI 继续迭代（任务中心关键字搜索）
+
+- 记录时间：`2026-04-04 06:53:34 EDT (-0400)`
+
+本轮继续完成：
+1. 任务中心新增关键字搜索框（匹配 `summary + detail`，大小写不敏感）。
+2. 支持和状态过滤联动叠加（例如 `Failed + timeout`）。
+3. 修复过滤边界：`All` 状态下关键字过滤也可生效。
+4. 增强 `task_center_widget_test`：
+   - 关键字匹配 `summary`；
+   - 关键字匹配 `detail`；
+   - 清空关键字恢复全量。
+
+验证结果：
+1. `cpp_pdftools` Debug：`7/7 passed`。
+2. `cpp_pdftools_gui` Debug：`8/8 passed`。
+3. `cpp_pdftools_gui` Release：`8/8 passed`。
+
+## Qt6 GUI 继续迭代（预览能力补齐 + 当前 PDF 预览）
+
+- 记录时间：`2026-04-04 07:39:36 EDT (-0400)`
+
+本轮继续完成：
+1. 新增统一预览服务 `PreviewService`（`cpp_pdftools_gui/services`）：
+   - `QueryPdfPageCount`：读取 PDF 页数；
+   - `RenderPdfIrPreview`：PDF -> IR -> HTML 预览；
+   - `BuildImageThumbnails`：本地图像缩略图；
+   - `ExtractImageThumbnailsFromPdf`：PDF 图片块缩略图提取。
+2. `TextExtractPage` 接入“当前 PDF + 指定页预览”：
+   - 路径变化后自动更新页码范围；
+   - 支持刷新指定页 IR 预览。
+3. `PageEditPage` 接入“删除/插入/替换来源页预览”：
+   - 按当前 Tab 自动选用预览源和页码。
+4. `ImageToPdfPage` 接入“图片转 PDF 前缩略图预览”：
+   - 展示可读图片数；
+   - 展示不可读图片计数。
+5. `Pdf2DocxPage` 接入“IR 预览 + 提图预览”：
+   - 支持按页预览 IR；
+   - 支持提取图片块并缩略图展示。
+6. `MergePage` 新增“当前 PDF 预览”：
+   - 新增预览文件下拉、页码输入、刷新按钮、预览浏览器；
+   - 输入列表变化时自动刷新预览候选文件与页码范围。
+7. 修复/规避点：
+   - 预览相关类在页面头文件中显式包含，避免 `unique_ptr` + 前置声明在 MOC 场景下的完整类型编译问题。
+
+新增/增强测试：
+1. `preview_service_test`：覆盖页数查询、IR HTML 预览、PDF 提图缩略图。
+2. `text_extract_page_test`：覆盖页数信息与指定页预览。
+3. `pdf2docx_page_test`：覆盖 IR 预览和提图预览联动。
+4. `image_to_pdf_page_test`：覆盖可读/不可读图片统计。
+5. `merge_page_test`：新增当前 PDF 预览刷新断言。
+
+验证结果：
+1. `cpp_pdftools_gui` Debug：`12/12 passed`。
+2. `cpp_pdftools_gui` Release：`12/12 passed`。
+3. `cpp_pdftools` Debug 回归：`7/7 passed`。
+
+## 手工测试清单输出（CLI + GUI 全工具）
+
+- 记录时间：`2026-04-04 07:46:10 EDT (-0400)`
+
+本轮完成：
+1. 新增手工测试待办文档：
+   - `prompts/pdftools-cli-gui-manual-test-todolist-v1.md`
+2. 覆盖范围：
+   - 全部 CLI 命令（`merge/text/attachments/pdf info/image2pdf/page delete|insert|replace/convert pdf2docx`）；
+   - 全部 GUI 页面（6 业务页 + 设置页 + 任务中心）；
+   - 各预览能力（当前 PDF 预览、IR 预览、提图预览、图片缩略图预览）。
+3. 清单内容包含：
+   - 前置准备；
+   - 每个 tool 的可执行步骤；
+   - 成功/失败路径；
+   - 产物校验；
+   - 统一完成判定与缺陷记录模板。
+
+## PDF->DOCX 排版正确性专项测试清单
+
+- 记录时间：`2026-04-04 07:50:07 EDT (-0400)`
+
+本轮完成：
+1. 输出 PDF->DOCX 排版专项测试文档：
+   - `prompts/pdftools-pdf2docx-layout-focus-test-todolist-v1.md`
+2. 文档重点：
+   - 明确 P0/P1 测试工具优先级（`pdftools convert pdf2docx`、`pdftools_gui`、`ir2html`）；
+   - 为每个工具给出具体排版检查步骤；
+   - 定义高优先级排版缺陷判定标准（title 错位、图片缺失、图文覆盖、对象顺序错乱）；
+   - 给出最短执行路径和缺陷归因模板。
+
+## PDF->DOCX 数学公式转换能力实现
+
+- 记录时间：`2026-04-04 08:31:07 EDT (-0400)`
+
+本轮完成：
+1. 新增“数学公式写出”能力（OMML）：
+   - 在 `cpp_pdf2docx/src/docx/p0_writer.cpp` 实现公式识别、表达式解析与 OMML 生成；
+   - 支持 `m:sSup/m:sSub/m:sSubSup/m:f`；
+   - 文档根节点新增 `xmlns:m` 数学命名空间。
+2. 为保证 `pdftools` CLI/GUI 生效，同步迁移相同实现到：
+   - `cpp_pdftools/src/legacy_pdf2docx/docx/p0_writer.cpp`。
+3. 误判抑制（重点）：
+   - 增加公式判定语义约束（不再仅依赖几何脚本）；
+   - 增加“写入前校验”，仅对有效结构化公式写 `m:oMath`，否则回退普通文本；
+   - 优化行聚类中的脚本附着条件，减少跨行误并。
+4. 新增测试：
+   - `cpp_pdf2docx/tests/unit/docx_math_test.cpp`；
+   - `cpp_pdf2docx/CMakeLists.txt` 增加 `docx_math_test` 目标。
+5. 新模块文档：
+   - `prompts/module-10-math-formula-docx.md`
+
+验证结果：
+1. `cpp_pdf2docx` Debug：`17/17 passed`。
+2. `cpp_pdf2docx` Release：`17/17 passed`（`ctest --test-dir build/linux-release`）。
+3. `cpp_pdftools` Debug：`7/7 passed`。
+4. `cpp_pdftools_gui` Debug：`12/12 passed`。
+5. 实样 `image-text.pdf` 抽检：
+   - `m:oMathPara` 从误判前的 20+ 收敛到 `3`；
+   - 保留为表达式类内容（如 `c=N`、`EvaluationScore=100`、`s2+s3+s4+s5`）。
+
+## `formula.pdf` 公式样本测试
+
+- 记录时间：`2026-04-04 08:38:40 EDT (-0400)`
+
+本轮完成：
+1. 对样本 `cpp_pdftools/build/formula.pdf` 执行专项测试（`pdftools` + `cpp_pdf2docx` 双链路）。
+2. 测试命令与结果明细已整理到：
+   - `prompts/formula-pdf-test-report-v1.md`
+
+关键结果：
+1. 转换链路成功，页数 `1`，无图片、无警告。
+2. IR 统计：`total_spans=60`，包含积分/极限/矩阵等公式相关 token。
+3. DOCX OMML 命中：`m:oMathPara=1`（识别 `a+b=c`），其余复杂公式仍为普通文本。
+
+当前结论：
+1. 线性公式能力已生效；
+2. `formula.pdf` 暴露出复杂二维公式（积分、极限、矩阵）结构化重建不足；
+3. 该文件已纳入后续公式模块主回归样本。
+
+## `formula.pdf` 公式识别优化（V2）
+
+- 记录时间：`2026-04-04 09:23:00 EDT (-0400)`
+
+本轮完成：
+1. 在 `cpp_pdf2docx/src/docx/p0_writer.cpp` 完成公式识别优化：
+   - 行聚类新增包络距离与脚本附着规则；
+   - 修复 `bbox.height=0` 小符号的脚本判定；
+   - `MathExpressionParser` 增加尾部 token 兜底，避免集合公式被截断；
+   - 修复 trig 关键词误判（`sin` 不再命中普通词 `using`）。
+2. 强化单测：
+   - 更新 `cpp_pdf2docx/tests/unit/docx_math_test.cpp`；
+   - 新增集合表达式与误判回归断言。
+3. 同步迁移到 `pdftools`：
+   - `cpp_pdftools/src/legacy_pdf2docx/docx/p0_writer.cpp`。
+4. 新增交接文档：
+   - `prompts/module-11-formula-optimization-v2.md`
+   - `prompts/formula-pdf-test-report-v2.md`
+
+验证结果：
+1. `cpp_pdf2docx`：`17/17 passed`。
+2. `cpp_pdftools`：`7/7 passed`。
+3. `cpp_pdftools_gui`：`12/12 passed`。
+4. `formula.pdf`：`m:oMathPara` 从 V1 的 `1` 提升到 V2 的 `8`。

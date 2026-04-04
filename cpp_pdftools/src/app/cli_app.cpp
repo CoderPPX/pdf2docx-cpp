@@ -20,6 +20,7 @@ void PrintHelp(std::ostream& out) {
       << "  pdftools merge <output.pdf> <input1.pdf> <input2.pdf> [inputN.pdf...]\n"
       << "  pdftools text extract --input <in.pdf> --output <out.txt|out.json> [--json] [--strict]\n"
       << "  pdftools attachments extract --input <in.pdf> --out-dir <dir> [--strict]\n"
+      << "  pdftools pdf info --input <in.pdf>\n"
       << "  pdftools image2pdf --output <out.pdf> --images <img1> <img2> [imgN]\n"
       << "  pdftools page delete --input <in.pdf> --output <out.pdf> --page <n>\n"
       << "  pdftools page insert --input <in.pdf> --output <out.pdf> --at <n> --source <src.pdf> --source-page <m>\n"
@@ -148,6 +149,24 @@ int RunCli(const std::vector<std::string>& args, std::ostream& out, std::ostream
     out << "attachments extracted count=" << result.attachments.size()
         << " parser=" << result.parser
         << " parse_failed=" << (result.parse_failed ? "yes" : "no") << "\n";
+    return 0;
+  }
+
+  if (command == "pdf" && args.size() >= 3 && args[2] == "info") {
+    auto input = GetOptionValue(args, "--input");
+    if (!input.has_value()) {
+      err << "pdf info requires --input\n";
+      return 1;
+    }
+
+    pdf::PdfInfoRequest request;
+    request.input_pdf = *input;
+    pdf::PdfInfoResult result;
+    Status status = pdf::GetPdfInfo(request, &result);
+    if (!status.ok()) {
+      return PrintStatus(err, status);
+    }
+    out << "pdf info pages=" << result.page_count << "\n";
     return 0;
   }
 

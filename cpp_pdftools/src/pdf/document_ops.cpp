@@ -75,6 +75,31 @@ Status MergePdf(const MergePdfRequest& request, MergePdfResult* result) {
   }
 }
 
+Status GetPdfInfo(const PdfInfoRequest& request, PdfInfoResult* result) {
+  if (request.input_pdf.empty()) {
+    return Status::Error(ErrorCode::kInvalidArgument, "input path must not be empty");
+  }
+  if (result == nullptr) {
+    return Status::Error(ErrorCode::kInvalidArgument, "result pointer is null");
+  }
+
+  std::error_code ec;
+  if (!std::filesystem::exists(request.input_pdf, ec) || ec) {
+    return Status::Error(ErrorCode::kNotFound, "input PDF does not exist", request.input_pdf);
+  }
+
+  try {
+    PoDoFo::PdfMemDocument document;
+    document.Load(request.input_pdf);
+    result->page_count = document.GetPages().GetCount();
+    return Status::Ok();
+  } catch (const std::exception& e) {
+    return Status::Error(ErrorCode::kPdfParseFailed, e.what());
+  } catch (...) {
+    return Status::Error(ErrorCode::kPdfParseFailed, "failed to parse PDF info");
+  }
+}
+
 Status DeletePage(const DeletePageRequest& request, DeletePageResult* result) {
   if (request.input_pdf.empty()) {
     return Status::Error(ErrorCode::kInvalidArgument, "input path must not be empty");
@@ -197,4 +222,3 @@ Status ReplacePage(const ReplacePageRequest& request, ReplacePageResult* result)
 }
 
 }  // namespace pdftools::pdf
-
