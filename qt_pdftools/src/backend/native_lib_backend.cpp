@@ -2,11 +2,15 @@
 
 #include <algorithm>
 
+#include <QDateTime>
+#include <QDir>
+#include <QFile>
 #include <QStringList>
 
 #include "pdftools/convert/pdf2docx.hpp"
 #include "pdftools/error_handling.hpp"
 #include "pdftools/pdf/document_ops.hpp"
+#include "pdftools/pdf/extract_ops.hpp"
 
 namespace qt_pdftools::backend {
 namespace {
@@ -187,6 +191,67 @@ core::TaskResult NativeLibBackend::RunTask(const core::TaskRequest& request) {
                         details);
   }
 
+  if (request.type == core::TaskType::kSwapPages) {
+    const uint32_t page_a = static_cast<uint32_t>(std::max(1, request.page));
+    const uint32_t page_b = static_cast<uint32_t>(std::max(1, request.page_b));
+    if (page_a == page_b) {
+      pdftools::Status invalid = pdftools::Status::Error(
+          pdftools::ErrorCode::kInvalidArgument,
+          "swap pages must be different");
+      return BuildFailure(backend_id, backend_label, invalid, QStringList() << QStringLiteral("page") << QStringLiteral("swap"));
+    }
+
+    QDir tmp_dir(QDir::tempPath() + QStringLiteral("/qt_pdftools_swap"));
+    if (!tmp_dir.exists()) {
+      tmp_dir.mkpath(QStringLiteral("."));
+    }
+    const qint64 ts = QDateTime::currentMSecsSinceEpoch();
+    const QString step1_pdf = tmp_dir.filePath(QStringLiteral("swap_step1_%1.pdf").arg(ts));
+
+    pdftools::pdf::ReplacePageRequest step1_req;
+    step1_req.input_pdf = request.input_pdf.toStdString();
+    step1_req.output_pdf = step1_pdf.toStdString();
+    step1_req.page_number = page_a;
+    step1_req.source_pdf = request.input_pdf.toStdString();
+    step1_req.source_page_number = page_b;
+    step1_req.overwrite = true;
+    pdftools::pdf::ReplacePageResult step1_res;
+    const pdftools::Status step1_status = pdftools::pdf::ReplacePage(step1_req, &step1_res);
+    if (!step1_status.ok()) {
+      return BuildFailure(backend_id, backend_label, step1_status, QStringList() << QStringLiteral("page") << QStringLiteral("swap"));
+    }
+
+    pdftools::pdf::ReplacePageRequest step2_req;
+    step2_req.input_pdf = step1_pdf.toStdString();
+    step2_req.output_pdf = request.output_pdf.toStdString();
+    step2_req.page_number = page_b;
+    step2_req.source_pdf = request.input_pdf.toStdString();
+    step2_req.source_page_number = page_a;
+    step2_req.overwrite = true;
+    pdftools::pdf::ReplacePageResult step2_res;
+    const pdftools::Status step2_status = pdftools::pdf::ReplacePage(step2_req, &step2_res);
+    QFile::remove(step1_pdf);
+    if (!step2_status.ok()) {
+      return BuildFailure(backend_id, backend_label, step2_status, QStringList() << QStringLiteral("page") << QStringLiteral("swap"));
+    }
+
+    QVariantMap details;
+    details.insert(QStringLiteral("outputPageCount"), static_cast<int>(step2_res.output_page_count));
+    details.insert(QStringLiteral("pageA"), static_cast<int>(page_a));
+    details.insert(QStringLiteral("pageB"), static_cast<int>(page_b));
+    const QStringList args = QStringList() << QStringLiteral("page") << QStringLiteral("swap")
+                                           << QStringLiteral("--input") << request.input_pdf
+                                           << QStringLiteral("--output") << request.output_pdf
+                                           << QStringLiteral("--page-a") << QString::number(request.page)
+                                           << QStringLiteral("--page-b") << QString::number(request.page_b);
+    return BuildSuccess(backend_id,
+                        backend_label,
+                        QStringLiteral("交换页成功，pageA=%1 pageB=%2").arg(request.page).arg(request.page_b),
+                        request.output_pdf,
+                        args,
+                        details);
+  }
+
   if (request.type == core::TaskType::kPdfToDocx) {
     pdftools::convert::PdfToDocxRequest native_req;
     native_req.input_pdf = request.input_pdf.toStdString();
@@ -227,6 +292,40 @@ core::TaskResult NativeLibBackend::RunTask(const core::TaskRequest& request) {
                             .arg(native_res.page_count)
                             .arg(native_res.image_count),
                         request.output_docx,
+                        args,
+                        details);
+  }
+
+  if (request.type == core::TaskType::kExtractImages) {
+    pdftools::pdf::ExtractImagesRequest native_req;
+    native_req.input_pdf = request.input_pdf.toStdString();
+    native_req.output_dir = request.output_dir.toStdString();
+    native_req.page_start = static_cast<uint32_t>(std::max(1, request.page));
+    native_req.page_end = static_cast<uint32_t>(std::max(0, request.page_b));
+    native_req.best_effort = true;
+    native_req.overwrite = true;
+
+    pdftools::pdf::ExtractImagesResult native_res;
+    const pdftools::Status status = pdftools::pdf::ExtractImages(native_req, &native_res);
+    const QStringList args = QStringList() << QStringLiteral("images") << QStringLiteral("extract")
+                                           << QStringLiteral("--input") << request.input_pdf
+                                           << QStringLiteral("--out-dir") << request.output_dir
+                                           << QStringLiteral("--page-start") << QString::number(request.page)
+                                           << QStringLiteral("--page-end") << QString::number(request.page_b);
+    if (!status.ok()) {
+      return BuildFailure(backend_id, backend_label, status, args);
+    }
+
+    QVariantMap details;
+    details.insert(QStringLiteral("imageCount"), static_cast<int>(native_res.images.size()));
+    details.insert(QStringLiteral("pageCount"), static_cast<int>(native_res.page_count));
+    details.insert(QStringLiteral("skippedCount"), static_cast<int>(native_res.skipped_count));
+    return BuildSuccess(backend_id,
+                        backend_label,
+                        QStringLiteral("提取内嵌图片完成，导出=%1，跳过=%2")
+                            .arg(native_res.images.size())
+                            .arg(native_res.skipped_count),
+                        request.output_dir,
                         args,
                         details);
   }

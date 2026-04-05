@@ -11,6 +11,8 @@ enum class TaskType {
   kDeletePage,
   kInsertPage,
   kReplacePage,
+  kSwapPages,
+  kExtractImages,
   kPdfToDocx
 };
 
@@ -20,7 +22,9 @@ struct TaskRequest {
   QStringList input_pdfs;
   QString input_pdf;
   QString output_pdf;
+  QString output_dir;
   int page = 1;
+  int page_b = 1;
 
   QString source_pdf;
   int at = 1;
@@ -74,6 +78,10 @@ inline QString TaskTypeToString(TaskType type) {
       return QStringLiteral("insert-page");
     case TaskType::kReplacePage:
       return QStringLiteral("replace-page");
+    case TaskType::kSwapPages:
+      return QStringLiteral("swap-pages");
+    case TaskType::kExtractImages:
+      return QStringLiteral("extract-images");
     case TaskType::kPdfToDocx:
       return QStringLiteral("pdf2docx");
   }
@@ -90,6 +98,10 @@ inline QString TaskTypeToDisplayName(TaskType type) {
       return QStringLiteral("插入页");
     case TaskType::kReplacePage:
       return QStringLiteral("替换页");
+    case TaskType::kSwapPages:
+      return QStringLiteral("交换页");
+    case TaskType::kExtractImages:
+      return QStringLiteral("提取图片");
     case TaskType::kPdfToDocx:
       return QStringLiteral("PDF -> DOCX");
   }

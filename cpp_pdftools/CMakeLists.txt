@@ -173,7 +173,8 @@ if(PDFTOOLS_ENABLE_TESTS)
       endif()
     endif()
     target_compile_definitions(pdftools_m3_extract_ops_test PRIVATE
-      PDFTOOLS_TEST_PDF_PATH="${PDFTOOLS_TEST_PDF}")
+      PDFTOOLS_TEST_PDF_PATH="${PDFTOOLS_TEST_PDF}"
+      PDFTOOLS_TEST_IMAGE_TEXT_PDF_PATH="${PDFTOOLS_TEST_IMAGE_TEXT_PDF}")
     add_test(NAME pdftools_m3_extract_ops_test COMMAND pdftools_m3_extract_ops_test)
 
     add_executable(pdftools_m4_create_ops_test tests/unit/m4_create_ops_test.cpp)

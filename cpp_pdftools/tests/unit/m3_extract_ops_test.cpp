@@ -117,6 +117,38 @@ int main() {
     return EXIT_FAILURE;
   }
 
+  // Embedded image extraction scenario.
+#ifdef PDFTOOLS_TEST_IMAGE_TEXT_PDF_PATH
+  const fs::path image_pdf = PDFTOOLS_TEST_IMAGE_TEXT_PDF_PATH;
+#else
+  const fs::path image_pdf = fixture_pdf;
+#endif
+  if (!fs::exists(image_pdf)) {
+    return EXIT_FAILURE;
+  }
+  const fs::path image_out_dir = out_dir / "images";
+  fs::create_directories(image_out_dir);
+
+  pdftools::pdf::ExtractImagesRequest image_request;
+  image_request.input_pdf = image_pdf.string();
+  image_request.output_dir = image_out_dir.string();
+  image_request.overwrite = true;
+  pdftools::pdf::ExtractImagesResult image_result;
+  status = pdftools::pdf::ExtractImages(image_request, &image_result);
+  if (!status.ok()) {
+    return EXIT_FAILURE;
+  }
+  if (image_result.parse_failed) {
+    return EXIT_FAILURE;
+  }
+  if (image_result.images.empty() && image_result.skipped_count == 0) {
+    return EXIT_FAILURE;
+  }
+  if (!image_result.images.empty() &&
+      (image_result.images.front().path.empty() || !fs::exists(image_result.images.front().path))) {
+    return EXIT_FAILURE;
+  }
+
   // Attachment extraction best-effort mode: invalid PDF should not fail the whole task.
   pdftools::pdf::ExtractAttachmentsRequest attachment_best_effort_request;
   attachment_best_effort_request.input_pdf = invalid_input.string();

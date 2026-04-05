@@ -5,8 +5,10 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string>
+#include <tuple>
 
 #include <podofo/podofo.h>
 
@@ -156,6 +158,136 @@ std::filesystem::path ResolveUniqueOutputPath(const std::filesystem::path& base_
     }
   }
   return base_path;
+}
+
+bool HasFilter(const PoDoFo::PdfFilterList& filters, PoDoFo::PdfFilterType filter_type) {
+  return std::find(filters.begin(), filters.end(), filter_type) != filters.end();
+}
+
+std::optional<std::tuple<std::string, std::string>> DetectBinaryMime(const PoDoFo::charbuff& buffer) {
+  if (buffer.size() >= 3 &&
+      static_cast<uint8_t>(buffer[0]) == 0xFF &&
+      static_cast<uint8_t>(buffer[1]) == 0xD8 &&
+      static_cast<uint8_t>(buffer[2]) == 0xFF) {
+    return std::make_tuple("jpg", "image/jpeg");
+  }
+  if (buffer.size() >= 8 &&
+      static_cast<uint8_t>(buffer[0]) == 0x89 &&
+      buffer[1] == 'P' &&
+      buffer[2] == 'N' &&
+      buffer[3] == 'G' &&
+      static_cast<uint8_t>(buffer[4]) == 0x0D &&
+      static_cast<uint8_t>(buffer[5]) == 0x0A &&
+      static_cast<uint8_t>(buffer[6]) == 0x1A &&
+      static_cast<uint8_t>(buffer[7]) == 0x0A) {
+    return std::make_tuple("png", "image/png");
+  }
+  if (buffer.size() >= 12 &&
+      static_cast<uint8_t>(buffer[0]) == 0x00 &&
+      static_cast<uint8_t>(buffer[1]) == 0x00 &&
+      static_cast<uint8_t>(buffer[2]) == 0x00 &&
+      static_cast<uint8_t>(buffer[3]) == 0x0C &&
+      buffer[4] == 'j' &&
+      buffer[5] == 'P' &&
+      buffer[6] == ' ' &&
+      buffer[7] == ' ' &&
+      static_cast<uint8_t>(buffer[8]) == 0x0D &&
+      static_cast<uint8_t>(buffer[9]) == 0x0A &&
+      static_cast<uint8_t>(buffer[10]) == 0x87 &&
+      static_cast<uint8_t>(buffer[11]) == 0x0A) {
+    return std::make_tuple("jp2", "image/jp2");
+  }
+  if (buffer.size() >= 6 &&
+      buffer[0] == 'G' &&
+      buffer[1] == 'I' &&
+      buffer[2] == 'F' &&
+      buffer[3] == '8' &&
+      (buffer[4] == '7' || buffer[4] == '9') &&
+      buffer[5] == 'a') {
+    return std::make_tuple("gif", "image/gif");
+  }
+  if (buffer.size() >= 2 &&
+      buffer[0] == 'B' &&
+      buffer[1] == 'M') {
+    return std::make_tuple("bmp", "image/bmp");
+  }
+  return std::nullopt;
+}
+
+struct ExtractedImageBinary {
+  std::string extension;
+  std::string mime_type;
+  std::vector<uint8_t> data;
+};
+
+std::optional<ExtractedImageBinary> TryDecodeImageToPpm(const PoDoFo::PdfImage& image) {
+  try {
+    const uint32_t width = image.GetWidth();
+    const uint32_t height = image.GetHeight();
+    if (width == 0 || height == 0) {
+      return std::nullopt;
+    }
+
+    const size_t expected_rgb_size = static_cast<size_t>(width) * static_cast<size_t>(height) * 3;
+    PoDoFo::charbuff decoded_rgb;
+    image.DecodeTo(decoded_rgb, PoDoFo::PdfPixelFormat::RGB24);
+    if (decoded_rgb.size() != expected_rgb_size) {
+      return std::nullopt;
+    }
+
+    const std::string header =
+        "P6\n" + std::to_string(width) + " " + std::to_string(height) + "\n255\n";
+    ExtractedImageBinary binary;
+    binary.extension = "ppm";
+    binary.mime_type = "image/x-portable-pixmap";
+    binary.data.reserve(header.size() + decoded_rgb.size());
+    binary.data.insert(binary.data.end(), header.begin(), header.end());
+    binary.data.insert(binary.data.end(), decoded_rgb.begin(), decoded_rgb.end());
+    return binary;
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+std::optional<ExtractedImageBinary> TryExtractImageBinary(const PoDoFo::PdfImage& image) {
+  const PoDoFo::PdfObjectStream* stream = image.GetObject().GetStream();
+  if (stream == nullptr) {
+    return std::nullopt;
+  }
+
+  const auto& filters = const_cast<PoDoFo::PdfObjectStream*>(stream)->GetFilters();
+  if (HasFilter(filters, PoDoFo::PdfFilterType::DCTDecode) ||
+      HasFilter(filters, PoDoFo::PdfFilterType::JPXDecode)) {
+    const PoDoFo::charbuff buffer = stream->GetCopySafe();
+    if (buffer.empty()) {
+      return std::nullopt;
+    }
+
+    ExtractedImageBinary binary;
+    binary.extension = HasFilter(filters, PoDoFo::PdfFilterType::DCTDecode) ? "jpg" : "jp2";
+    binary.mime_type = HasFilter(filters, PoDoFo::PdfFilterType::DCTDecode) ? "image/jpeg" : "image/jp2";
+    binary.data.insert(binary.data.end(), buffer.begin(), buffer.end());
+    return binary;
+  }
+
+  PoDoFo::charbuff raw_buffer;
+  try {
+    raw_buffer = stream->GetCopy(true);
+  } catch (...) {
+    raw_buffer = stream->GetCopySafe();
+  }
+  if (!raw_buffer.empty()) {
+    auto detected = DetectBinaryMime(raw_buffer);
+    if (detected.has_value()) {
+      ExtractedImageBinary binary;
+      binary.extension = std::get<0>(*detected);
+      binary.mime_type = std::get<1>(*detected);
+      binary.data.insert(binary.data.end(), raw_buffer.begin(), raw_buffer.end());
+      return binary;
+    }
+  }
+
+  return TryDecodeImageToPpm(image);
 }
 
 Status WriteOutputFile(const std::string& output_path, const std::string& content) {
@@ -478,6 +610,124 @@ Status ExtractAttachments(const ExtractAttachmentsRequest& request, ExtractAttac
       },
       ErrorCode::kPdfParseFailed,
       "failed to extract attachments from PDF",
+      request.input_pdf);
+}
+
+Status ExtractImages(const ExtractImagesRequest& request, ExtractImagesResult* result) {
+  if (request.input_pdf.empty()) {
+    return Status::Error(ErrorCode::kInvalidArgument, "input path must not be empty");
+  }
+  if (request.output_dir.empty()) {
+    return Status::Error(ErrorCode::kInvalidArgument, "output_dir must not be empty");
+  }
+  if (result == nullptr) {
+    return Status::Error(ErrorCode::kInvalidArgument, "result pointer is null");
+  }
+
+  std::filesystem::path output_dir(request.output_dir);
+  std::error_code ec;
+  std::filesystem::create_directories(output_dir, ec);
+  if (ec) {
+    return Status::Error(ErrorCode::kIoError, "failed to create output directory", request.output_dir);
+  }
+
+  return GuardStatus(
+      [&]() -> Status {
+        result->images.clear();
+        result->page_count = 0;
+        result->skipped_count = 0;
+        result->parse_failed = false;
+        result->parser = "podofo";
+
+        PoDoFo::PdfMemDocument document;
+        std::string load_error_message;
+        Status load_status = TryLoadDocument(&document, request.input_pdf, &load_error_message);
+        if (!load_status.ok()) {
+          if (request.best_effort) {
+            result->parse_failed = true;
+            result->parser = "none";
+            return Status::Ok();
+          }
+          return Status::Error(
+              ErrorCode::kPdfParseFailed,
+              load_error_message.empty() ? load_status.message() : load_error_message,
+              request.input_pdf);
+        }
+
+        const uint32_t total_pages = document.GetPages().GetCount();
+        uint32_t begin_page = 0;
+        uint32_t end_page = 0;
+        Status range_status =
+            ResolvePageRange(total_pages, request.page_start, request.page_end, &begin_page, &end_page);
+        if (!range_status.ok()) {
+          return range_status;
+        }
+
+        result->page_count = end_page - begin_page + 1;
+
+        for (uint32_t page_index = begin_page; page_index <= end_page; ++page_index) {
+          const auto& page = document.GetPages().GetPageAt(page_index);
+          PoDoFo::PdfContentStreamReader reader(page);
+          PoDoFo::PdfContent content;
+          uint32_t image_index = 0;
+
+          while (reader.TryReadNext(content)) {
+            if (content.GetType() != PoDoFo::PdfContentType::DoXObject || content.HasErrors()) {
+              continue;
+            }
+
+            const auto& xobject = content.GetXObject();
+            if (xobject == nullptr || xobject->GetType() != PoDoFo::PdfXObjectType::Image) {
+              continue;
+            }
+
+            auto* image = dynamic_cast<const PoDoFo::PdfImage*>(xobject.get());
+            if (image == nullptr) {
+              continue;
+            }
+
+            ++image_index;
+            auto extracted = TryExtractImageBinary(*image);
+            if (!extracted.has_value()) {
+              ++result->skipped_count;
+              continue;
+            }
+
+            std::string filename =
+                "p" + std::to_string(page_index + 1) + "_img" + std::to_string(image_index) + "." + extracted->extension;
+            filename = SanitizeFilename(filename);
+            const std::filesystem::path output_path =
+                ResolveUniqueOutputPath(output_dir / filename, request.overwrite);
+
+            std::ofstream out(output_path, std::ios::binary);
+            if (!out.is_open()) {
+              return Status::Error(ErrorCode::kIoError, "failed to open image output file", output_path.string());
+            }
+            out.write(reinterpret_cast<const char*>(extracted->data.data()),
+                      static_cast<std::streamsize>(extracted->data.size()));
+            out.close();
+            if (!out.good()) {
+              return Status::Error(ErrorCode::kIoError, "failed to write image file", output_path.string());
+            }
+
+            ExtractedImageInfo info;
+            info.page = page_index + 1;
+            info.index = image_index;
+            info.width = image->GetWidth();
+            info.height = image->GetHeight();
+            info.filename = output_path.filename().string();
+            info.path = output_path.string();
+            info.extension = extracted->extension;
+            info.mime_type = extracted->mime_type;
+            info.size_bytes = static_cast<uint64_t>(extracted->data.size());
+            result->images.push_back(std::move(info));
+          }
+        }
+
+        return Status::Ok();
+      },
+      ErrorCode::kPdfParseFailed,
+      "failed to extract embedded images from PDF",
       request.input_pdf);
 }
 

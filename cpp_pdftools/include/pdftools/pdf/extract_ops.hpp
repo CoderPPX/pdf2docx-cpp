@@ -64,4 +64,35 @@ struct ExtractAttachmentsResult {
 
 Status ExtractAttachments(const ExtractAttachmentsRequest& request, ExtractAttachmentsResult* result);
 
+struct ExtractImagesRequest {
+  std::string input_pdf;
+  std::string output_dir;
+  uint32_t page_start = 1;  // 1-based
+  uint32_t page_end = 0;    // 0 means to the last page
+  bool best_effort = true;  // true: parse failure returns empty result; false: return error
+  bool overwrite = false;
+};
+
+struct ExtractedImageInfo {
+  uint32_t page = 0;       // 1-based
+  uint32_t index = 0;      // image index in page (1-based)
+  uint32_t width = 0;
+  uint32_t height = 0;
+  std::string filename;
+  std::string path;
+  std::string extension;
+  std::string mime_type;
+  uint64_t size_bytes = 0;
+};
+
+struct ExtractImagesResult {
+  std::vector<ExtractedImageInfo> images;
+  uint32_t page_count = 0;
+  uint32_t skipped_count = 0;
+  bool parse_failed = false;
+  std::string parser = "podofo";
+};
+
+Status ExtractImages(const ExtractImagesRequest& request, ExtractImagesResult* result);
+
 }  // namespace pdftools::pdf
