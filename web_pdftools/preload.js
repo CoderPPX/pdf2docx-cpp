@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('pdftoolsAPI', {
   runTask: (task) => ipcRenderer.invoke('pdftools:run', task),
   suggestOutput: (payload) => ipcRenderer.invoke('paths:suggestOutput', payload),
   readFile: (filePath) => ipcRenderer.invoke('fs:readFile', filePath),
+  writeFile: (payload) => ipcRenderer.invoke('fs:writeFile', payload),
   onMenuAction: (handler) => {
     if (typeof handler !== 'function') {
       return () => {};

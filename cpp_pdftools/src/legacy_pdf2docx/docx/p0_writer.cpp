@@ -669,6 +669,40 @@ double ComputeLineBaseline(const std::vector<const ir::TextSpan*>& line_spans) {
   return MedianValue(std::move(all_baselines));
 }
 
+double ComputeLineLeft(const std::vector<const ir::TextSpan*>& line_spans) {
+  double line_left = std::numeric_limits<double>::infinity();
+  for (const auto* span : line_spans) {
+    if (span == nullptr || span->text.empty()) {
+      continue;
+    }
+    line_left = std::min(line_left, SpanLeftX(*span));
+  }
+  return std::isfinite(line_left) ? line_left : 0.0;
+}
+
+double ComputeLineRight(const std::vector<const ir::TextSpan*>& line_spans) {
+  double line_right = -std::numeric_limits<double>::infinity();
+  for (const auto* span : line_spans) {
+    if (span == nullptr || span->text.empty()) {
+      continue;
+    }
+    line_right = std::max(line_right, SpanRightX(*span));
+  }
+  return std::isfinite(line_right) ? line_right : 0.0;
+}
+
+double ComputeLineMedianHeight(const std::vector<const ir::TextSpan*>& line_spans) {
+  std::vector<double> heights;
+  heights.reserve(line_spans.size());
+  for (const auto* span : line_spans) {
+    if (span == nullptr || span->text.empty()) {
+      continue;
+    }
+    heights.push_back(SpanHeight(*span));
+  }
+  return heights.empty() ? 12.0 : std::max(8.0, MedianValue(std::move(heights)));
+}
+
 bool LooksMathToken(const std::string& text) {
   if (text.empty()) {
     return false;
@@ -977,6 +1011,94 @@ bool ContainsAnySubstring(const std::string& text,
   return false;
 }
 
+bool LooksLikeCjkNaturalLanguageLine(const std::string& plain_text,
+                                     bool has_unicode_math_symbol,
+                                     bool has_greek_symbol,
+                                     bool has_script,
+                                     int operator_count,
+                                     int digit_count,
+                                     int alpha_count) {
+  if (plain_text.empty()) {
+    return false;
+  }
+
+  int non_ascii_byte_count = 0;
+  int ascii_alnum_count = 0;
+  int ascii_math_punct_count = 0;
+  for (unsigned char ch : plain_text) {
+    if (ch >= 128) {
+      ++non_ascii_byte_count;
+      continue;
+    }
+    if (std::isalnum(ch)) {
+      ++ascii_alnum_count;
+      continue;
+    }
+    if (IsStrongMathSplitOperator(static_cast<char>(ch)) ||
+        IsMathBracketChar(static_cast<char>(ch)) ||
+        ch == ',' || ch == '.') {
+      ++ascii_math_punct_count;
+    }
+  }
+
+  const bool cjk_dominant =
+      non_ascii_byte_count >= std::max(12, static_cast<int>(plain_text.size() * 0.30));
+  if (!cjk_dominant) {
+    return false;
+  }
+
+  if (has_unicode_math_symbol || has_greek_symbol) {
+    return false;
+  }
+
+  (void)operator_count;
+  (void)digit_count;
+  (void)alpha_count;
+  (void)has_script;
+  (void)ascii_alnum_count;
+  (void)ascii_math_punct_count;
+  return true;
+}
+
+bool HasLongAsciiHexRun(const std::string& text, size_t min_run) {
+  size_t run = 0;
+  for (unsigned char ch : text) {
+    if (std::isxdigit(ch)) {
+      ++run;
+      if (run >= min_run) {
+        return true;
+      }
+      continue;
+    }
+    run = 0;
+  }
+  return false;
+}
+
+bool LooksLikeKeyValueMappingLine(const std::string& text) {
+  if (text.size() < 6 || text.size() > 128) {
+    return false;
+  }
+  const bool has_colon = text.find(':') != std::string::npos ||
+                         text.find("：") != std::string::npos;
+  const bool has_quote = text.find('"') != std::string::npos ||
+                         text.find('\'') != std::string::npos;
+  const bool has_slash = text.find('/') != std::string::npos;
+  if (!has_colon || (!has_quote && !has_slash)) {
+    return false;
+  }
+  return HasLongAsciiHexRun(text, 4);
+}
+
+bool ContainsNonAsciiByte(const std::string& text) {
+  for (unsigned char ch : text) {
+    if (ch >= 128) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool IsLikelyMathLine(const std::string& plain_text, const MathLineCandidate& candidate) {
   if (candidate.linear_text.empty()) {
     return false;
@@ -1011,6 +1133,24 @@ bool IsLikelyMathLine(const std::string& plain_text, const MathLineCandidate& ca
       default:
         break;
     }
+  }
+
+  if (LooksLikeCjkNaturalLanguageLine(plain_text,
+                                      has_unicode_math_symbol,
+                                      has_greek_symbol,
+                                      candidate.has_script,
+                                      operator_count,
+                                      digit_count,
+                                      alpha_count)) {
+    return false;
+  }
+  if (!has_unicode_math_symbol &&
+      !has_greek_symbol &&
+      ContainsNonAsciiByte(plain_text)) {
+    return false;
+  }
+  if (!candidate.has_script && LooksLikeKeyValueMappingLine(text)) {
+    return false;
   }
 
   if (candidate.has_script &&
@@ -1066,6 +1206,245 @@ bool StartsWithNumericHeading(const std::string& text) {
     ++index;
   }
   return index < text.size() && text[index] == '.';
+}
+
+bool StartsWithListMarker(const std::string& text) {
+  size_t index = 0;
+  while (index < text.size() && std::isspace(static_cast<unsigned char>(text[index]))) {
+    ++index;
+  }
+  if (index >= text.size()) {
+    return false;
+  }
+
+  const char first = text[index];
+  if ((first == '-' || first == '*' || first == '+') &&
+      index + 1 < text.size() &&
+      std::isspace(static_cast<unsigned char>(text[index + 1]))) {
+    return true;
+  }
+
+  if (std::isdigit(static_cast<unsigned char>(first))) {
+    while (index < text.size() && std::isdigit(static_cast<unsigned char>(text[index]))) {
+      ++index;
+    }
+    if (index < text.size() && (text[index] == '.' || text[index] == ')')) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::string TrimLeftCopy(std::string text) {
+  size_t index = 0;
+  while (index < text.size() && std::isspace(static_cast<unsigned char>(text[index]))) {
+    ++index;
+  }
+  text.erase(0, index);
+  return text;
+}
+
+bool IsBracketHeadingLine(const std::string& text) {
+  const std::string trimmed = TrimLeftCopy(text);
+  return trimmed.size() >= 6 &&
+         trimmed.rfind("【", 0) == 0 &&
+         trimmed.find("】") != std::string::npos;
+}
+
+bool EndsWithColon(const std::string& text) {
+  size_t end = text.size();
+  while (end > 0 && std::isspace(static_cast<unsigned char>(text[end - 1]))) {
+    --end;
+  }
+  if (end == 0) {
+    return false;
+  }
+  if (text[end - 1] == ':') {
+    return true;
+  }
+  if (end >= std::string("：").size() &&
+      text.compare(end - std::string("：").size(), std::string("：").size(), "：") == 0) {
+    return true;
+  }
+  return false;
+}
+
+bool IsLikelyDefinitionLabelLine(const std::string& text) {
+  const std::string trimmed = TrimLeftCopy(text);
+  if (trimmed.size() < 6 || StartsWithNumericHeading(trimmed) || StartsWithListMarker(trimmed)) {
+    return false;
+  }
+  if (IsBracketHeadingLine(trimmed)) {
+    return false;
+  }
+
+  size_t colon_pos = trimmed.find(':');
+  const size_t full_colon_pos = trimmed.find("：");
+  if (full_colon_pos != std::string::npos &&
+      (colon_pos == std::string::npos || full_colon_pos < colon_pos)) {
+    colon_pos = full_colon_pos;
+  }
+  if (colon_pos == std::string::npos || colon_pos < 2 || colon_pos > 42) {
+    return false;
+  }
+  bool has_non_space_after_colon = false;
+  for (size_t i = colon_pos + 1; i < trimmed.size(); ++i) {
+    if (!std::isspace(static_cast<unsigned char>(trimmed[i]))) {
+      has_non_space_after_colon = true;
+      break;
+    }
+  }
+  if (!has_non_space_after_colon) {
+    return false;
+  }
+
+  const std::string prefix = trimmed.substr(0, colon_pos);
+  if (prefix.find("。") != std::string::npos ||
+      prefix.find('!') != std::string::npos ||
+      prefix.find('?') != std::string::npos) {
+    return false;
+  }
+
+  int ascii_word_count = 0;
+  int cjk_byte_count = 0;
+  for (unsigned char ch : prefix) {
+    if (ch < 128) {
+      if (std::isalnum(ch) || ch == '_') {
+        ++ascii_word_count;
+      }
+    } else {
+      ++cjk_byte_count;
+    }
+  }
+  if (ascii_word_count == 0 && cjk_byte_count == 0) {
+    return false;
+  }
+  return true;
+}
+
+bool EndsWithUtf8Token(const std::string& text, const std::initializer_list<const char*>& tokens) {
+  for (const char* token : tokens) {
+    if (token == nullptr) {
+      continue;
+    }
+    const size_t len = std::char_traits<char>::length(token);
+    if (len == 0 || len > text.size()) {
+      continue;
+    }
+    if (text.compare(text.size() - len, len, token) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool EndsWithSentenceTerminator(const std::string& text) {
+  if (text.empty()) {
+    return false;
+  }
+  size_t end = text.size();
+  while (end > 0 && std::isspace(static_cast<unsigned char>(text[end - 1]))) {
+    --end;
+  }
+  if (end == 0) {
+    return false;
+  }
+
+  const char last = text[end - 1];
+  switch (last) {
+    case '.':
+    case '!':
+    case '?':
+    case ';':
+    case ':':
+      return true;
+    default:
+      break;
+  }
+  const std::string trimmed = text.substr(0, end);
+  return EndsWithUtf8Token(trimmed, {"。", "！", "？", "；", "："});
+}
+
+bool IsAsciiWordChar(unsigned char ch) {
+  return std::isalnum(ch) || ch == '_';
+}
+
+size_t FindFirstNonSpaceIndex(const std::string& text) {
+  size_t index = 0;
+  while (index < text.size() && std::isspace(static_cast<unsigned char>(text[index]))) {
+    ++index;
+  }
+  return index;
+}
+
+size_t FindLastNonSpaceIndex(const std::string& text) {
+  size_t end = text.size();
+  while (end > 0 && std::isspace(static_cast<unsigned char>(text[end - 1]))) {
+    --end;
+  }
+  return end;
+}
+
+bool IsLikelyCenteredLine(const ir::Page& page, double line_left, double line_right) {
+  const double page_width = page.width_pt > 0.0 ? page.width_pt : 595.0;
+  const double line_width = line_right - line_left;
+  if (line_width <= 0.0 || line_width > page_width * 0.75) {
+    return false;
+  }
+  const double line_center = line_left + line_width * 0.5;
+  const double page_center = page_width * 0.5;
+  return std::fabs(line_center - page_center) <= std::max(8.0, page_width * 0.04);
+}
+
+bool ShouldInsertSpaceBetweenLines(const std::string& previous_text,
+                                   const std::string& next_text) {
+  const size_t previous_end = FindLastNonSpaceIndex(previous_text);
+  const size_t next_start = FindFirstNonSpaceIndex(next_text);
+  if (previous_end == 0 || next_start >= next_text.size()) {
+    return false;
+  }
+
+  const unsigned char previous_last = static_cast<unsigned char>(previous_text[previous_end - 1]);
+  const unsigned char next_first = static_cast<unsigned char>(next_text[next_start]);
+  if (previous_last >= 128 || next_first >= 128) {
+    return false;
+  }
+
+  if (IsAsciiWordChar(previous_last) && IsAsciiWordChar(next_first)) {
+    return true;
+  }
+  if ((previous_last == '.' || previous_last == ',' || previous_last == ';' || previous_last == ':') &&
+      IsAsciiWordChar(next_first)) {
+    return true;
+  }
+  return false;
+}
+
+void AppendContinuationLine(std::string* paragraph_text,
+                            const std::string& next_line) {
+  if (paragraph_text == nullptr || next_line.empty()) {
+    return;
+  }
+  if (paragraph_text->empty()) {
+    *paragraph_text = next_line;
+    return;
+  }
+
+  const size_t previous_end = FindLastNonSpaceIndex(*paragraph_text);
+  const size_t next_start = FindFirstNonSpaceIndex(next_line);
+  if (previous_end > 0 &&
+      next_start < next_line.size() &&
+      (*paragraph_text)[previous_end - 1] == '-' &&
+      std::isalpha(static_cast<unsigned char>(next_line[next_start]))) {
+    paragraph_text->erase(previous_end - 1);
+    paragraph_text->append(next_line.substr(next_start));
+    return;
+  }
+
+  if (ShouldInsertSpaceBetweenLines(*paragraph_text, next_line)) {
+    paragraph_text->push_back(' ');
+  }
+  paragraph_text->append(next_line.substr(next_start));
 }
 
 bool LooksLikeTitleCaseLine(const std::string& text) {
@@ -1706,31 +2085,40 @@ void AppendTitleParagraph(tinyxml2::XMLDocument& document,
   if (lines.empty()) {
     return;
   }
-  auto* paragraph = document.NewElement("w:p");
-  body->InsertEndChild(paragraph);
-  AppendTightParagraphProperties(document, paragraph);
-
-  auto* run = document.NewElement("w:r");
-  paragraph->InsertEndChild(run);
-
-  auto* run_properties = document.NewElement("w:rPr");
-  run->InsertEndChild(run_properties);
-  auto* bold = document.NewElement("w:b");
-  run_properties->InsertEndChild(bold);
-  auto* size = document.NewElement("w:sz");
-  size->SetAttribute("w:val", "36");
-  run_properties->InsertEndChild(size);
-  auto* size_cs = document.NewElement("w:szCs");
-  size_cs->SetAttribute("w:val", "36");
-  run_properties->InsertEndChild(size_cs);
-
   for (size_t index = 0; index < lines.size(); ++index) {
-    if (index > 0) {
-      auto* break_element = document.NewElement("w:br");
-      run->InsertEndChild(break_element);
+    const std::string& line = lines[index];
+    if (line.empty()) {
+      continue;
     }
+
+    auto* paragraph = document.NewElement("w:p");
+    body->InsertEndChild(paragraph);
+    AppendTightParagraphProperties(document, paragraph);
+
+    if (index + 1 < lines.size()) {
+      auto* paragraph_properties = paragraph->FirstChildElement("w:pPr");
+      if (paragraph_properties != nullptr) {
+        auto* keep_next = document.NewElement("w:keepNext");
+        paragraph_properties->InsertEndChild(keep_next);
+      }
+    }
+
+    auto* run = document.NewElement("w:r");
+    paragraph->InsertEndChild(run);
+
+    auto* run_properties = document.NewElement("w:rPr");
+    run->InsertEndChild(run_properties);
+    auto* bold = document.NewElement("w:b");
+    run_properties->InsertEndChild(bold);
+    auto* size = document.NewElement("w:sz");
+    size->SetAttribute("w:val", "36");
+    run_properties->InsertEndChild(size);
+    auto* size_cs = document.NewElement("w:szCs");
+    size_cs->SetAttribute("w:val", "36");
+    run_properties->InsertEndChild(size_cs);
+
     auto* text = document.NewElement("w:t");
-    text->SetText(lines[index].c_str());
+    text->SetText(line.c_str());
     run->InsertEndChild(text);
   }
 }
@@ -1974,6 +2362,17 @@ bool ShouldMergeMathContinuation(const std::string& previous_expression,
 void AppendPageTextParagraphs(tinyxml2::XMLDocument& document,
                               tinyxml2::XMLElement* body,
                               const ir::Page& page) {
+  struct TextLineContext {
+    std::string text;
+    double baseline = 0.0;
+    double left = 0.0;
+    double right = 0.0;
+    double height = 12.0;
+    bool is_heading_or_list = false;
+    bool is_definition_label = false;
+    bool is_centered = false;
+  };
+
   constexpr double kLineTolerancePt = 3.0;
   constexpr double kScriptAttachTolerancePt = 9.0;
   constexpr double kLooseScriptAttachTolerancePt = 20.0;
@@ -1988,6 +2387,23 @@ void AppendPageTextParagraphs(tinyxml2::XMLDocument& document,
   std::string pending_math_expression;
   bool has_pending_math_expression = false;
   std::vector<std::string> pending_title_lines;
+  std::string pending_text_paragraph;
+  bool has_pending_text_paragraph = false;
+  TextLineContext last_text_line{};
+  bool has_last_text_line = false;
+
+  const auto flush_pending_text = [&]() {
+    if (!has_pending_text_paragraph || pending_text_paragraph.empty()) {
+      pending_text_paragraph.clear();
+      has_pending_text_paragraph = false;
+      has_last_text_line = false;
+      return;
+    }
+    AppendTextParagraph(document, body, pending_text_paragraph);
+    pending_text_paragraph.clear();
+    has_pending_text_paragraph = false;
+    has_last_text_line = false;
+  };
 
   const auto flush_pending_math = [&]() {
     if (!has_pending_math_expression || pending_math_expression.empty()) {
@@ -2010,12 +2426,61 @@ void AppendPageTextParagraphs(tinyxml2::XMLDocument& document,
     pending_title_lines.clear();
   };
 
+  const auto should_start_new_text_paragraph = [&](const TextLineContext& previous,
+                                                   const TextLineContext& current) {
+    if (previous.text.empty()) {
+      return true;
+    }
+    if (previous.is_heading_or_list || current.is_heading_or_list) {
+      return true;
+    }
+    if (current.is_definition_label && !EndsWithColon(previous.text)) {
+      return true;
+    }
+    if (previous.is_definition_label && current.is_definition_label) {
+      return true;
+    }
+    if (previous.is_definition_label && EndsWithSentenceTerminator(previous.text)) {
+      return true;
+    }
+    if ((previous.is_centered || current.is_centered) &&
+        previous.is_centered != current.is_centered) {
+      return true;
+    }
+
+    const double baseline_gap = previous.baseline - current.baseline;
+    if (baseline_gap <= 0.0) {
+      return true;
+    }
+    const double reference_height = std::max(previous.height, current.height);
+    if (baseline_gap > std::max(22.0, reference_height * 1.9)) {
+      return true;
+    }
+
+    const double left_delta = current.left - previous.left;
+    if (left_delta > 14.0 || std::fabs(left_delta) > 26.0) {
+      return true;
+    }
+
+    if (StartsWithListMarker(current.text)) {
+      return true;
+    }
+    if (EndsWithSentenceTerminator(previous.text) &&
+        current.left > previous.left + 8.0) {
+      return true;
+    }
+    return false;
+  };
+
   const auto flush_line = [&]() {
     if (current_line.empty()) {
       return;
     }
     std::vector<const ir::TextSpan*> ordered_line_spans = SortLineSpansForReading(current_line);
     const double line_baseline = OrderedLineBaseline(ordered_line_spans);
+    const double line_left = ComputeLineLeft(ordered_line_spans);
+    const double line_right = ComputeLineRight(ordered_line_spans);
+    const double line_height = ComputeLineMedianHeight(ordered_line_spans);
     const size_t line_index = page_line_index++;
     const std::string line_text = BuildLineText(ordered_line_spans);
     const MathLineCandidate math_line = BuildMathLinearText(ordered_line_spans);
@@ -2028,6 +2493,7 @@ void AppendPageTextParagraphs(tinyxml2::XMLDocument& document,
 
     if (IsLikelyMathLine(line_text, math_line)) {
       flush_pending_title();
+      flush_pending_text();
       if (has_pending_math_expression &&
           ShouldMergeMathContinuation(pending_math_expression, math_line.linear_text)) {
         pending_math_expression += " ";
@@ -2046,6 +2512,7 @@ void AppendPageTextParagraphs(tinyxml2::XMLDocument& document,
                           line_baseline,
                           line_index,
                           !pending_title_lines.empty())) {
+      flush_pending_text();
       if (pending_title_lines.size() < 2) {
         pending_title_lines.push_back(line_text);
         return;
@@ -2053,7 +2520,41 @@ void AppendPageTextParagraphs(tinyxml2::XMLDocument& document,
     }
 
     flush_pending_title();
-    AppendTextParagraph(document, body, line_text);
+
+    TextLineContext current_text_line{
+        .text = line_text,
+        .baseline = line_baseline,
+        .left = line_left,
+        .right = line_right,
+        .height = line_height,
+        .is_heading_or_list = StartsWithNumericHeading(line_text) ||
+                              StartsWithListMarker(line_text) ||
+                              IsBracketHeadingLine(line_text),
+        .is_definition_label = IsLikelyDefinitionLabelLine(line_text),
+        .is_centered = IsLikelyCenteredLine(page, line_left, line_right),
+    };
+
+    if (!has_pending_text_paragraph) {
+      pending_text_paragraph = line_text;
+      has_pending_text_paragraph = true;
+      last_text_line = current_text_line;
+      has_last_text_line = true;
+      return;
+    }
+
+    if (has_last_text_line &&
+        should_start_new_text_paragraph(last_text_line, current_text_line)) {
+      flush_pending_text();
+      pending_text_paragraph = line_text;
+      has_pending_text_paragraph = true;
+      last_text_line = current_text_line;
+      has_last_text_line = true;
+      return;
+    }
+
+    AppendContinuationLine(&pending_text_paragraph, line_text);
+    last_text_line = current_text_line;
+    has_last_text_line = true;
   };
 
   for (const auto& span : page.spans) {
@@ -2139,6 +2640,7 @@ void AppendPageTextParagraphs(tinyxml2::XMLDocument& document,
   flush_line();
   flush_pending_math();
   flush_pending_title();
+  flush_pending_text();
 }
 
 std::string BuildDocumentXml(const ir::Document& ir_document,

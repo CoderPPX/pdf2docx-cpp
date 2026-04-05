@@ -8,6 +8,52 @@ import {
 } from './worker_protocol.mjs';
 import { createPdftoolsWasmBackend } from './pdftools_wasm_backend.mjs';
 
+function collectTransferablesFromValue(value, transferables, seen) {
+  if (value instanceof Uint8Array || ArrayBuffer.isView(value)) {
+    const buffer = value.buffer;
+    if (buffer instanceof ArrayBuffer && !seen.has(buffer)) {
+      seen.add(buffer);
+      transferables.push(buffer);
+    }
+    return;
+  }
+
+  if (value instanceof ArrayBuffer) {
+    if (!seen.has(value)) {
+      seen.add(value);
+      transferables.push(value);
+    }
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectTransferablesFromValue(item, transferables, seen);
+    }
+    return;
+  }
+
+  if (value && typeof value === 'object') {
+    for (const key of Object.keys(value)) {
+      collectTransferablesFromValue(value[key], transferables, seen);
+    }
+  }
+}
+
+function collectResponseTransferables(response) {
+  if (!response || typeof response !== 'object' || response.ok !== true) {
+    return [];
+  }
+  if (!('payload' in response)) {
+    return [];
+  }
+
+  const transferables = [];
+  const seen = new Set();
+  collectTransferablesFromValue(response.payload, transferables, seen);
+  return transferables;
+}
+
 export function createWorkerDispatcher(options = {}) {
   const backendFactory = options.backendFactory || createPdftoolsWasmBackend;
 
@@ -103,7 +149,8 @@ export function createWorkerDispatcher(options = {}) {
       response = makeErrorResponse(requestId, error);
     }
 
-    postMessage(response);
+    const transferables = collectResponseTransferables(response);
+    postMessage(response, transferables);
   }
 
   function createReadyEvent() {

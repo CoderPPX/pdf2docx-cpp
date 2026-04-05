@@ -1,4 +1,10 @@
 import * as pdfjsLib from './node_modules/pdfjs-dist/legacy/build/pdf.mjs';
+import {
+  BackendId,
+  WasmBackendMode,
+  createTaskBackendRegistry,
+  resolveBackendId
+} from './backends/task_backends.mjs';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   './node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs',
@@ -18,13 +24,43 @@ const previewPageLabelEl = document.getElementById('preview-page-label');
 const previewZoomLabelEl = document.getElementById('preview-zoom-label');
 const settingsModalEl = document.getElementById('settings-modal');
 const settingsThemeModeEl = document.getElementById('settings-theme-mode');
+const settingsBackendModeEl = document.getElementById('settings-backend-mode');
+const settingsWasmFallbackEl = document.getElementById('settings-wasm-fallback');
 const settingsSaveEl = document.getElementById('settings-save');
 const settingsCancelEl = document.getElementById('settings-cancel');
 const settingsCloseEl = document.getElementById('settings-close');
+const bridgeStatStatusEl = document.getElementById('bridge-stat-status');
+const bridgeStatTaskEl = document.getElementById('bridge-stat-task');
+const bridgeStatStageEl = document.getElementById('bridge-stat-stage');
+const bridgeStatTimeEl = document.getElementById('bridge-stat-time');
+const bridgeStatFilesEl = document.getElementById('bridge-stat-files');
+const bridgeStatBytesEl = document.getElementById('bridge-stat-bytes');
+const bridgeStatUpdatedEl = document.getElementById('bridge-stat-updated');
+const bridgeStatAvgEl = document.getElementById('bridge-stat-avg');
+const bridgeStatSuccessEl = document.getElementById('bridge-stat-success');
+const bridgeStatFallbackEl = document.getElementById('bridge-stat-fallback');
+const bridgeStatFallbackTimeEl = document.getElementById('bridge-stat-fallback-time');
+const bridgeStatsResetEl = document.getElementById('bridge-stats-reset');
 
 const themeStorageKey = 'web_pdftools.theme.mode';
+const backendStorageKey = 'web_pdftools.backend.mode';
+const wasmFallbackStorageKey = 'web_pdftools.wasm.autoFallback';
 const themeModes = new Set(['dark', 'light', 'system']);
 const systemDarkMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+const wasmBridgeTaskTypes = new Set(['merge', 'delete-page', 'insert-page', 'replace-page', 'pdf2docx']);
+const wasmFallbackCodes = new Set([
+  'UNSUPPORTED_FEATURE',
+  'BACKEND_RESERVED',
+  'WASM_RUN_FAILED',
+  'WASM_OP_FAILED',
+  'WASM_API_MISSING',
+  'WORKER_RUNTIME_ERROR',
+  'WORKER_CLOSED',
+  'WORKER_UNAVAILABLE',
+  'NOT_INITIALIZED',
+  'IO_ERROR'
+]);
+const wasmPreviewHintCodes = new Set(['UNSUPPORTED_FEATURE', 'BACKEND_RESERVED', 'NOT_IMPLEMENTED']);
 
 const tabSelectors = [
   'merge-tab-select',
@@ -46,13 +82,147 @@ const singleTabSelectBindings = [
 ];
 
 const previewTabs = [];
+const bridgeHistoryTotals = [];
+const bridgeHistoryOutcomes = [];
 let activeTabId = null;
 let running = false;
 let renderToken = 0;
 let activeThemeMode = 'dark';
+let wasmAutoFallbackEnabled = true;
+let lastFallbackAt = '--';
+const backendRegistry = createTaskBackendRegistry(api, {
+  wasmMode: WasmBackendMode.Worker
+});
+let activeBackendId = BackendId.NativeCli;
 
 function now() {
   return new Date().toLocaleTimeString();
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value < 0) {
+    return '--';
+  }
+  if (value < 1024) {
+    return `${Math.round(value)} B`;
+  }
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+  return `${(value / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function updateBridgeStatsView(update = {}) {
+  if (!bridgeStatStatusEl) {
+    return;
+  }
+
+  const status = update.status || 'pending';
+  bridgeStatStatusEl.className = `status ${status}`;
+  if (update.statusText) {
+    bridgeStatStatusEl.textContent = update.statusText;
+  }
+  if (bridgeStatTaskEl && update.task) {
+    bridgeStatTaskEl.textContent = update.task;
+  }
+  if (bridgeStatStageEl && update.stage) {
+    bridgeStatStageEl.textContent = update.stage;
+  }
+  if (bridgeStatTimeEl && update.time) {
+    bridgeStatTimeEl.textContent = update.time;
+  }
+  if (bridgeStatFilesEl && update.files) {
+    bridgeStatFilesEl.textContent = update.files;
+  }
+  if (bridgeStatBytesEl && update.bytes) {
+    bridgeStatBytesEl.textContent = update.bytes;
+  }
+  if (bridgeStatAvgEl && update.avg) {
+    bridgeStatAvgEl.textContent = update.avg;
+  }
+  if (bridgeStatSuccessEl && update.success) {
+    bridgeStatSuccessEl.textContent = update.success;
+  }
+  if (bridgeStatFallbackEl && update.fallback) {
+    bridgeStatFallbackEl.textContent = update.fallback;
+  }
+  if (bridgeStatFallbackTimeEl && update.fallbackTime) {
+    bridgeStatFallbackTimeEl.textContent = update.fallbackTime;
+  }
+  if (bridgeStatUpdatedEl) {
+    bridgeStatUpdatedEl.textContent = now();
+  }
+}
+
+function recordBridgeTotal(totalMs) {
+  const value = Number(totalMs);
+  if (!Number.isFinite(value) || value < 0) {
+    return;
+  }
+  bridgeHistoryTotals.push(value);
+  if (bridgeHistoryTotals.length > 5) {
+    bridgeHistoryTotals.shift();
+  }
+}
+
+function formatBridgeAverage() {
+  if (bridgeHistoryTotals.length === 0) {
+    return '--';
+  }
+  const sum = bridgeHistoryTotals.reduce((acc, value) => acc + value, 0);
+  const avg = sum / bridgeHistoryTotals.length;
+  return `${avg.toFixed(1)} ms`;
+}
+
+function recordBridgeOutcome(ok) {
+  bridgeHistoryOutcomes.push(Boolean(ok));
+  if (bridgeHistoryOutcomes.length > 5) {
+    bridgeHistoryOutcomes.shift();
+  }
+}
+
+function formatBridgeSuccessRate() {
+  if (bridgeHistoryOutcomes.length === 0) {
+    return '--';
+  }
+  const successCount = bridgeHistoryOutcomes.filter(Boolean).length;
+  const total = bridgeHistoryOutcomes.length;
+  const ratio = (successCount / total) * 100;
+  return `${successCount}/${total} (${ratio.toFixed(0)}%)`;
+}
+
+function buildDefaultBridgeStatsState() {
+  return {
+    status: 'pending',
+    statusText: '尚无任务',
+    task: '--',
+    stage: '--',
+    time: '--',
+    files: '--',
+    bytes: '--',
+    avg: formatBridgeAverage(),
+    success: formatBridgeSuccessRate(),
+    fallback: '--',
+    fallbackTime: lastFallbackAt
+  };
+}
+
+function resetBridgeStats({ log = true } = {}) {
+  lastFallbackAt = '--';
+  bridgeHistoryTotals.length = 0;
+  bridgeHistoryOutcomes.length = 0;
+  updateBridgeStatsView(buildDefaultBridgeStatsState());
+  if (log) {
+    appendLog('WASM Bridge 统计已清空。');
+  }
+}
+
+function shouldFallbackFromWasm(result) {
+  if (!result || result.ok) {
+    return false;
+  }
+  return wasmFallbackCodes.has(result.code);
 }
 
 function appendLog(message) {
@@ -63,6 +233,119 @@ function appendLog(message) {
     logEl.textContent = line;
   }
   logEl.scrollTop = logEl.scrollHeight;
+}
+
+function getBackendById(id) {
+  return backendRegistry.get(id) || null;
+}
+
+function getActiveBackend() {
+  return getBackendById(activeBackendId) || getBackendById(BackendId.NativeCli);
+}
+
+function normalizeBackendId(id) {
+  const resolved = resolveBackendId(id, BackendId.NativeCli);
+  return backendRegistry.has(resolved) ? resolved : BackendId.NativeCli;
+}
+
+async function refreshBackendStatus({ log = true } = {}) {
+  const backend = getActiveBackend();
+  if (!backend) {
+    statusEl.className = 'status error';
+    statusEl.textContent = '后端不可用';
+    if (log) {
+      appendLog('未找到可用 backend。');
+    }
+    return;
+  }
+
+  try {
+    const status = await backend.getStatus();
+    if (backend.id === BackendId.Wasm && status.ready) {
+      statusEl.className = 'status ok';
+      statusEl.textContent = status.message;
+    } else if (backend.id === BackendId.Wasm) {
+      statusEl.className = 'status pending';
+      statusEl.textContent = status.message;
+    } else if (status.ready) {
+      statusEl.className = 'status ok';
+      statusEl.textContent = status.message;
+    } else {
+      statusEl.className = 'status error';
+      statusEl.textContent = status.message;
+    }
+
+    if (log) {
+      appendLog(`当前 backend: ${backend.label}`);
+      appendLog(`backend 状态: ${status.message}`);
+    }
+  } catch (error) {
+    statusEl.className = 'status error';
+    statusEl.textContent = `状态检测失败: ${backend.label}`;
+    if (log) {
+      appendLog(`backend 状态检测异常: ${error.message || String(error)}`);
+    }
+  }
+}
+
+function applyBackendMode(mode, { persist = true, log = true, refreshStatus = true } = {}) {
+  const normalized = normalizeBackendId(mode);
+  activeBackendId = normalized;
+
+  if (settingsBackendModeEl) {
+    settingsBackendModeEl.value = normalized;
+  }
+
+  if (persist) {
+    try {
+      window.localStorage.setItem(backendStorageKey, normalized);
+    } catch (_error) {
+      // no-op
+    }
+  }
+
+  const backend = getActiveBackend();
+  if (log && backend) {
+    appendLog(`backend 切换: ${backend.label}`);
+  }
+
+  if (refreshStatus) {
+    void refreshBackendStatus({ log: false });
+  }
+}
+
+function normalizeBooleanStorage(value, fallback = true) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (value === 'true' || value === '1') {
+    return true;
+  }
+  if (value === 'false' || value === '0') {
+    return false;
+  }
+  return fallback;
+}
+
+function applyWasmFallbackSetting(enabled, { persist = true, log = true } = {}) {
+  const normalized = Boolean(enabled);
+  wasmAutoFallbackEnabled = normalized;
+
+  if (settingsWasmFallbackEl) {
+    settingsWasmFallbackEl.checked = normalized;
+  }
+
+  if (persist) {
+    try {
+      window.localStorage.setItem(wasmFallbackStorageKey, normalized ? 'true' : 'false');
+    } catch (_error) {
+      // no-op
+    }
+  }
+
+  if (log) {
+    appendLog(`WASM 自动回退: ${normalized ? '开启' : '关闭'}`);
+  }
 }
 
 function normalizeThemeMode(mode) {
@@ -108,6 +391,12 @@ function openThemeSettings() {
   }
 
   settingsThemeModeEl.value = activeThemeMode;
+  if (settingsBackendModeEl) {
+    settingsBackendModeEl.value = activeBackendId;
+  }
+  if (settingsWasmFallbackEl) {
+    settingsWasmFallbackEl.checked = wasmAutoFallbackEnabled;
+  }
   settingsModalEl.classList.add('open');
   settingsModalEl.setAttribute('aria-hidden', 'false');
   document.body.classList.add('modal-open');
@@ -147,13 +436,45 @@ function initThemeSettings() {
   }
 }
 
+function initBackendSettings() {
+  let initialMode = BackendId.NativeCli;
+  try {
+    initialMode = normalizeBackendId(window.localStorage.getItem(backendStorageKey));
+  } catch (_error) {
+    // no-op
+  }
+
+  applyBackendMode(initialMode, { persist: false, log: false, refreshStatus: false });
+}
+
+function initWasmFallbackSettings() {
+  let initialEnabled = true;
+  try {
+    initialEnabled = normalizeBooleanStorage(window.localStorage.getItem(wasmFallbackStorageKey), true);
+  } catch (_error) {
+    // no-op
+  }
+  applyWasmFallbackSetting(initialEnabled, { persist: false, log: false });
+}
+
 function bindThemeSettings() {
-  if (!settingsModalEl || !settingsThemeModeEl || !settingsSaveEl || !settingsCancelEl || !settingsCloseEl) {
+  if (
+    !settingsModalEl ||
+    !settingsThemeModeEl ||
+    !settingsBackendModeEl ||
+    !settingsWasmFallbackEl ||
+    !settingsSaveEl ||
+    !settingsCancelEl ||
+    !settingsCloseEl
+  ) {
     return;
   }
 
-  settingsSaveEl.addEventListener('click', () => {
+  settingsSaveEl.addEventListener('click', async () => {
     applyThemeMode(settingsThemeModeEl.value, { persist: true, log: true });
+    applyBackendMode(settingsBackendModeEl.value, { persist: true, log: true, refreshStatus: false });
+    applyWasmFallbackSetting(settingsWasmFallbackEl.checked, { persist: true, log: true });
+    await refreshBackendStatus({ log: true });
     closeThemeSettings();
   });
 
@@ -175,6 +496,16 @@ function bindThemeSettings() {
     if (event.key === 'Escape' && settingsModalEl.classList.contains('open')) {
       closeThemeSettings();
     }
+  });
+}
+
+function bindBridgeStatsControls() {
+  if (!bridgeStatsResetEl) {
+    return;
+  }
+
+  bridgeStatsResetEl.addEventListener('click', () => {
+    resetBridgeStats({ log: true });
   });
 }
 
@@ -509,12 +840,34 @@ async function runTask(task, successHint) {
     return null;
   }
 
+  const backend = getActiveBackend();
+  if (!backend) {
+    appendLog('未找到可用 backend，任务取消。');
+    return null;
+  }
+
   setButtonsDisabled(true);
-  appendLog(`开始任务: ${task.type}`);
+  appendLog(`开始任务: ${task.type} (backend=${backend.id})`);
+  if (backend.id === BackendId.Wasm && wasmBridgeTaskTypes.has(task?.type)) {
+    updateBridgeStatsView({
+      status: 'pending',
+      statusText: '执行中',
+      task: task.type,
+      stage: 'running',
+      time: '--',
+      files: '--',
+      bytes: '--',
+      avg: formatBridgeAverage(),
+      success: formatBridgeSuccessRate(),
+      fallback: '--'
+    });
+  }
 
   try {
-    const result = await api.runTask(task);
-    appendLog(`命令: pdftools ${(result.args || []).join(' ')}`);
+    const result = await backend.runTask(task);
+    if (Array.isArray(result.args) && result.args.length > 0) {
+      appendLog(`命令: pdftools ${result.args.join(' ')}`);
+    }
 
     if (result.stdout) {
       appendLog(`stdout: ${result.stdout.trim()}`);
@@ -523,10 +876,124 @@ async function runTask(task, successHint) {
       appendLog(`stderr: ${result.stderr.trim()}`);
     }
 
+    const bridgeDetails =
+      result?.details && typeof result.details === 'object' && result.details.bridge
+        ? result.details
+        : null;
+    if (bridgeDetails) {
+      const ioFiles = bridgeDetails.ioFiles || {};
+      const ioBytes = bridgeDetails.ioBytes || {};
+      const timingsMs = bridgeDetails.timingsMs || {};
+      appendLog(
+        `WASM bridge: files(in/out)=${ioFiles.input ?? 0}/${ioFiles.output ?? 0}, bytes(in/out)=${ioBytes.input ?? 0}/${ioBytes.output ?? 0}`
+      );
+      appendLog(
+        `WASM bridge timings(ms): prepare=${timingsMs.prepareInput ?? 0}, run=${timingsMs.workerRun ?? 0}, persist=${timingsMs.persistOutput ?? 0}, total=${timingsMs.total ?? 0}`
+      );
+    }
+
     if (result.ok) {
+      if (bridgeDetails) {
+        const filesText = `${bridgeDetails.ioFiles?.input ?? 0} / ${bridgeDetails.ioFiles?.output ?? 0}`;
+        const bytesText = `${formatBytes(bridgeDetails.ioBytes?.input ?? 0)} / ${formatBytes(
+          bridgeDetails.ioBytes?.output ?? 0
+        )}`;
+        const totalMs = bridgeDetails.timingsMs?.total;
+        recordBridgeOutcome(true);
+        recordBridgeTotal(totalMs);
+        updateBridgeStatsView({
+          status: 'ok',
+          statusText: '最近成功',
+          task: bridgeDetails.taskType || task.type,
+          stage: 'done',
+          time: Number.isFinite(Number(totalMs)) ? `${Number(totalMs).toFixed(1)} ms` : '--',
+          files: filesText,
+          bytes: bytesText,
+          avg: formatBridgeAverage(),
+          success: formatBridgeSuccessRate(),
+          fallback: '否'
+        });
+      }
       appendLog(`任务成功: ${successHint}`);
     } else {
       appendLog(`任务失败(code=${result.code})`);
+      if (result?.details?.stage) {
+        appendLog(`失败阶段: ${result.details.stage}`);
+      }
+      if (backend.id === BackendId.Wasm) {
+        if (wasmBridgeTaskTypes.has(task?.type)) {
+          recordBridgeOutcome(false);
+        }
+        const elapsedMs = Number(result?.details?.elapsedMs);
+        updateBridgeStatsView({
+          status: 'error',
+          statusText: '最近失败',
+          task: task?.type || '--',
+          stage: result?.details?.stage || 'failed',
+          time: Number.isFinite(elapsedMs) ? `${elapsedMs.toFixed(1)} ms` : '--',
+          files: '--',
+          bytes: '--',
+          avg: formatBridgeAverage(),
+          success: formatBridgeSuccessRate(),
+          fallback: '否'
+        });
+      }
+      if (backend.id === BackendId.Wasm && wasmPreviewHintCodes.has(result?.code)) {
+        appendLog('提示: wasm backend 为 preview，当前仅部分能力可用。');
+      }
+
+      if (backend.id === BackendId.Wasm && wasmAutoFallbackEnabled && shouldFallbackFromWasm(result)) {
+        const nativeBackend = getBackendById(BackendId.NativeCli);
+        if (!nativeBackend) {
+          appendLog('自动回退失败：未找到 Native CLI backend。');
+          return result;
+        }
+
+        const nativeStatus = await nativeBackend.getStatus();
+        if (!nativeStatus.ready) {
+          appendLog(`自动回退失败：${nativeStatus.message}`);
+          return result;
+        }
+
+        appendLog(`WASM 失败(code=${result.code})，尝试自动回退到 Native CLI。`);
+        const fallbackResult = await nativeBackend.runTask(task);
+        if (Array.isArray(fallbackResult.args) && fallbackResult.args.length > 0) {
+          appendLog(`Fallback 命令: pdftools ${fallbackResult.args.join(' ')}`);
+        }
+        if (fallbackResult.stdout) {
+          appendLog(`fallback stdout: ${fallbackResult.stdout.trim()}`);
+        }
+        if (fallbackResult.stderr) {
+          appendLog(`fallback stderr: ${fallbackResult.stderr.trim()}`);
+        }
+
+        if (fallbackResult.ok) {
+          lastFallbackAt = now();
+          appendLog(`回退成功: ${successHint}`);
+          updateBridgeStatsView({
+            status: 'pending',
+            statusText: 'WASM失败已回退',
+            task: task?.type || '--',
+            stage: 'fallback-native',
+            time: '--',
+            files: '--',
+            bytes: '--',
+            avg: formatBridgeAverage(),
+            success: formatBridgeSuccessRate(),
+            fallback: '是',
+            fallbackTime: lastFallbackAt
+          });
+          return {
+            ...fallbackResult,
+            fallbackFrom: BackendId.Wasm
+          };
+        }
+
+        appendLog(`回退后仍失败(code=${fallbackResult.code})`);
+      }
+      if (backend.id === BackendId.Wasm && !wasmAutoFallbackEnabled && shouldFallbackFromWasm(result)) {
+        appendLog('WASM 自动回退已关闭，可在 Settings 中开启。');
+      }
     }
 
     return result;
@@ -539,16 +1006,7 @@ async function runTask(task, successHint) {
 }
 
 async function initStatus() {
-  const status = await api.getStatus();
-  if (status.found) {
-    statusEl.className = 'status ok';
-    statusEl.textContent = `已找到 pdftools: ${status.binaryPath}`;
-    appendLog(`pdftools binary: ${status.binaryPath}`);
-  } else {
-    statusEl.className = 'status error';
-    statusEl.textContent = '未找到 pdftools';
-    appendLog(status.hint);
-  }
+  await refreshBackendStatus({ log: true });
 }
 
 function bindNativeMenuBar() {
@@ -583,6 +1041,16 @@ function bindNativeMenuBar() {
 
     if (action === 'open-theme-settings') {
       openThemeSettings();
+    }
+  });
+}
+
+function bindBackendLifecycle() {
+  window.addEventListener('beforeunload', () => {
+    for (const backend of backendRegistry.values()) {
+      if (typeof backend?.dispose === 'function') {
+        Promise.resolve(backend.dispose()).catch(() => {});
+      }
     }
   });
 }
@@ -690,6 +1158,14 @@ function bindMerge() {
   document.getElementById('merge-run').addEventListener('click', async () => {
     const inputPdfs = parseMultiLinePaths(inputEl.value);
     const outputPdf = outputEl.value.trim();
+    if (inputPdfs.length < 2) {
+      appendLog('合并任务至少需要 2 个输入 PDF。');
+      return;
+    }
+    if (!outputPdf) {
+      appendLog('请先选择合并输出文件。');
+      return;
+    }
     const result = await runTask({ type: 'merge', inputPdfs, outputPdf }, `合并完成: ${outputPdf}`);
     if (result?.ok && outputPdf) {
       openPdfTab(outputPdf, true);
@@ -898,15 +1374,20 @@ function bindPdf2Docx() {
 
 function bootstrap() {
   initThemeSettings();
+  initBackendSettings();
+  initWasmFallbackSettings();
+  resetBridgeStats({ log: false });
   appendLog('UI 已初始化。');
   initStatus().catch((error) => {
     statusEl.className = 'status error';
-    statusEl.textContent = '检测 pdftools 失败';
-    appendLog(`检测失败: ${error.message || String(error)}`);
+    statusEl.textContent = '检测 backend 失败';
+    appendLog(`backend 检测失败: ${error.message || String(error)}`);
   });
 
   bindNativeMenuBar();
+  bindBackendLifecycle();
   bindThemeSettings();
+  bindBridgeStatsControls();
   bindPreviewToolbar();
   bindTabSelectors();
 

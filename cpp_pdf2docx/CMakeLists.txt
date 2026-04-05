@@ -189,6 +189,11 @@ if(PDF2DOCX_ENABLE_TESTS)
     target_include_directories(pdf2docx_docx_math_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
     add_test(NAME docx_math_test COMMAND pdf2docx_docx_math_test)
 
+    add_executable(pdf2docx_docx_reflow_test tests/unit/docx_reflow_test.cpp)
+    target_link_libraries(pdf2docx_docx_reflow_test PRIVATE pdf2docx::core)
+    target_include_directories(pdf2docx_docx_reflow_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    add_test(NAME docx_reflow_test COMMAND pdf2docx_docx_reflow_test)
+
     add_executable(pdf2docx_test_pdf_fixture_test tests/unit/test_pdf_fixture_test.cpp)
     target_link_libraries(pdf2docx_test_pdf_fixture_test PRIVATE pdf2docx::core)
     target_compile_definitions(pdf2docx_test_pdf_fixture_test PRIVATE PDF2DOCX_TEST_PDF_PATH="${PDF2DOCX_TEST_PDF}")

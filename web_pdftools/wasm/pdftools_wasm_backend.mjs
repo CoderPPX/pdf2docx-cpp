@@ -27,10 +27,6 @@ function normalizeModuleFactory(moduleNamespace) {
   throw new WorkerProtocolError('WASM_LOAD_FAILED', 'Unsupported wasm module format');
 }
 
-function readU32(module, ptr) {
-  return module.HEAPU32[ptr >>> 2] >>> 0;
-}
-
 function resolveExport(module, names) {
   for (const name of names) {
     if (typeof module[name] === 'function') {
@@ -48,17 +44,162 @@ function requireEmscriptenApi(module, property) {
 }
 
 function requireHeap(module, property) {
-  if (!module || !(module[property] instanceof Uint8Array) && !(module[property] instanceof Uint32Array)) {
+  if (!module || (!(module[property] instanceof Uint8Array) && !(module[property] instanceof Uint32Array))) {
     throw new WorkerProtocolError('WASM_API_MISSING', `Missing emscripten heap: ${property}`);
   }
   return module[property];
 }
 
+function toUint8Array(data) {
+  if (data instanceof Uint8Array) {
+    return data;
+  }
+  if (data instanceof ArrayBuffer) {
+    return new Uint8Array(data);
+  }
+  if (ArrayBuffer.isView(data)) {
+    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  }
+  if (Array.isArray(data)) {
+    return Uint8Array.from(data);
+  }
+  throw new WorkerProtocolError('BAD_REQUEST', 'Binary payload must be Uint8Array/ArrayBuffer');
+}
+
+function isHostFsBridgePayload(payload) {
+  return isPlainObject(payload) && payload.__hostFsBridge === true;
+}
+
+function ensureFsApi(module) {
+  const fsApi = module?.FS;
+  if (!fsApi || typeof fsApi.writeFile !== 'function' || typeof fsApi.readFile !== 'function') {
+    throw new WorkerProtocolError('WASM_API_MISSING', 'WASM module FS API is required for host file bridge');
+  }
+  return fsApi;
+}
+
+function pathParent(filePath) {
+  if (typeof filePath !== 'string' || filePath.length === 0) {
+    return '/';
+  }
+  const normalized = filePath.replace(/\\/g, '/');
+  const idx = normalized.lastIndexOf('/');
+  if (idx <= 0) {
+    return '/';
+  }
+  return normalized.slice(0, idx);
+}
+
+function fsExists(fsApi, dirPath) {
+  if (typeof fsApi.analyzePath === 'function') {
+    try {
+      return Boolean(fsApi.analyzePath(dirPath)?.exists);
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  if (typeof fsApi.stat === 'function') {
+    try {
+      fsApi.stat(dirPath);
+      return true;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  return false;
+}
+
+function ensureParentDir(fsApi, filePath) {
+  const parent = pathParent(filePath);
+  if (!parent || parent === '/') {
+    return;
+  }
+
+  const segments = parent.split('/').filter(Boolean);
+  let current = '';
+  for (const segment of segments) {
+    current += `/${segment}`;
+    if (fsExists(fsApi, current)) {
+      continue;
+    }
+    if (typeof fsApi.mkdir !== 'function') {
+      continue;
+    }
+    try {
+      fsApi.mkdir(current);
+    } catch (error) {
+      if (!fsExists(fsApi, current)) {
+        throw new WorkerProtocolError(
+          'IO_ERROR',
+          `Failed to create wasm directory: ${current}`,
+          { cause: String(error) },
+          'wasm.fs.mkdir'
+        );
+      }
+    }
+  }
+}
+
+function stageBridgeInputs(fsApi, inputFiles) {
+  if (!Array.isArray(inputFiles)) {
+    return;
+  }
+
+  for (const file of inputFiles) {
+    if (!isPlainObject(file) || typeof file.path !== 'string' || file.path.length === 0) {
+      throw new WorkerProtocolError('BAD_REQUEST', 'Bridge input file requires path');
+    }
+    if (!('data' in file)) {
+      throw new WorkerProtocolError('BAD_REQUEST', `Bridge input file missing data: ${file.path}`);
+    }
+
+    ensureParentDir(fsApi, file.path);
+    fsApi.writeFile(file.path, toUint8Array(file.data));
+  }
+}
+
+function collectBridgeOutputs(fsApi, outputFiles) {
+  if (!Array.isArray(outputFiles) || outputFiles.length === 0) {
+    return [];
+  }
+
+  const outputs = [];
+  for (const file of outputFiles) {
+    if (!isPlainObject(file) || typeof file.path !== 'string' || file.path.length === 0) {
+      throw new WorkerProtocolError('BAD_REQUEST', 'Bridge output file requires path');
+    }
+
+    let data;
+    try {
+      data = fsApi.readFile(file.path);
+    } catch (error) {
+      throw new WorkerProtocolError(
+        'IO_ERROR',
+        `Failed to read wasm output file: ${file.path}`,
+        { cause: String(error) },
+        'wasm.fs.readFile'
+      );
+    }
+
+    outputs.push({
+      path: file.path,
+      hostPath: typeof file.hostPath === 'string' ? file.hostPath : null,
+      // Always return a detached-safe copy. Some FS implementations may
+      // return a view backed by wasm HEAP; transferring that buffer would
+      // detach the worker heap and break subsequent wasm calls.
+      data: toUint8Array(data).slice()
+    });
+  }
+  return outputs;
+}
+
 function createWasmInvoker(module) {
   const malloc = requireEmscriptenApi(module, '_malloc');
   const free = requireEmscriptenApi(module, '_free');
-  const heapU8 = requireHeap(module, 'HEAPU8');
-  const heapU32 = requireHeap(module, 'HEAPU32');
+  const getHeapU8 = () => requireHeap(module, 'HEAPU8');
+  const getHeapU32 = () => requireHeap(module, 'HEAPU32');
 
   const opFn = resolveExport(module, ['_pdftools_wasm_op', 'pdftools_wasm_op']);
   const freeResponseFn = resolveExport(module, ['_pdftools_wasm_free', 'pdftools_wasm_free']);
@@ -77,6 +218,9 @@ function createWasmInvoker(module) {
     const responseLenPtr = malloc(4);
 
     try {
+      // Always use fresh heap views. Wasm memory growth detaches old buffers.
+      let heapU8 = getHeapU8();
+      let heapU32 = getHeapU32();
       heapU8.set(requestBytes, requestPtr);
       heapU32[responsePtrPtr >>> 2] = 0;
       heapU32[responseLenPtr >>> 2] = 0;
@@ -91,8 +235,11 @@ function createWasmInvoker(module) {
         );
       }
 
-      const responsePtr = readU32(module, responsePtrPtr);
-      const responseLen = readU32(module, responseLenPtr);
+      // Re-acquire views after op call; op may grow memory.
+      heapU8 = getHeapU8();
+      heapU32 = getHeapU32();
+      const responsePtr = heapU32[responsePtrPtr >>> 2] >>> 0;
+      const responseLen = heapU32[responseLenPtr >>> 2] >>> 0;
 
       if (responsePtr === 0 || responseLen === 0) {
         throw new WorkerProtocolError('WASM_OP_FAILED', 'WASM response buffer is empty');
@@ -166,7 +313,24 @@ export async function createPdftoolsWasmBackend(initPayload = {}) {
         throw new WorkerProtocolError('BAD_REQUEST', 'run payload must be an object');
       }
 
-      return invokeWasm(operationPayload);
+      if (!isHostFsBridgePayload(operationPayload)) {
+        return invokeWasm(operationPayload);
+      }
+
+      const bridgeTask = operationPayload.task;
+      if (!isPlainObject(bridgeTask)) {
+        throw new WorkerProtocolError('BAD_REQUEST', 'Bridge payload requires object field: task');
+      }
+
+      const fsApi = ensureFsApi(moduleInstance);
+      stageBridgeInputs(fsApi, operationPayload.inputFiles);
+      const wasmResult = invokeWasm(bridgeTask);
+      const outputFiles = collectBridgeOutputs(fsApi, operationPayload.outputFiles);
+      return {
+        bridge: true,
+        wasmResult,
+        outputFiles
+      };
     },
 
     async dispose() {

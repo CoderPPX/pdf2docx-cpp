@@ -1731,3 +1731,75 @@ V2 结果摘要：
   - `cpp_pdftools` 核心模块、CLI、GUI 服务层异常处理已统一并加 context。
   - `web_pdftools/wasm` worker 协议错误模型统一为 `code/message/context/details`。
   - 新增 C++/JS 测试并全部通过。
+
+---
+
+## Module 17 记录：普通文本段落重组优化（忽略公式）
+
+- 详情文档：`prompts/module-17-layout-paragraph-reflow-v1.md`
+- 核心变更：`p0_writer` 新增行到段落重组逻辑，降低“每行一段”问题。
+- 同步范围：`cpp_pdf2docx` + `cpp_pdftools legacy_pdf2docx`。
+- 回归结果：
+  - `cpp_pdf2docx`: `18/18 passed`
+  - `cpp_pdftools`: `8/8 passed`
+  - `image-text.pdf` 文本段落数：`117 -> 80`
+
+---
+
+## Module 18 记录：定义/指令条目分段优化（忽略公式）
+
+- 详情文档：`prompts/module-18-layout-list-reflow-v1.md`
+- 关键点：
+  - 新增定义条目识别（冒号标签行）与 `【...】` 标题行识别；
+  - 强化段落切分策略，避免条目串段；
+  - 修正“仅行尾冒号”误判（冒号后必须有正文）。
+- 验证：
+  - `cpp_pdf2docx`: `18/18 passed`
+  - `cpp_pdftools`: `8/8 passed`
+- 新产物：
+  - `cpp_pdf2docx/build/final_image_text_layout_v3.docx`
+  - `cpp_pdftools/build/final_image_text_layout_v3.docx`
+
+---
+
+## Module 19 记录：数学误判抑制与排版稳定化（忽略公式）
+
+- 详情文档：`prompts/module-19-layout-math-false-positive-guard-v1.md`
+- 核心目标：减少 `image-text.pdf` 中普通中文行被错误输出为 `m:oMathPara` 的问题。
+
+本轮关键改动：
+1. `IsLikelyMathLine` 增加 CJK 自然语言优先门槛。
+2. 新增非 ASCII 行兜底规则（无显式数学符号/希腊字母时不走数学段）。
+3. 新增 key-value/颜色映射文本识别，避免 `"8FF5":"000000"` 类行误判。
+4. 修复定义标签行后误合并：上一行为定义行且已句末结束时强制新段。
+5. 同步到 `cpp_pdftools` legacy writer。
+
+测试与回归：
+1. `cpp_pdf2docx`: `18/18 passed`
+2. `cpp_pdftools`: `8/8 passed`
+3. `image-text.pdf` 产物：
+   - `cpp_pdf2docx/build/final_image_text_layout_v9.docx`
+   - `cpp_pdftools/build/final_image_text_layout_v9.docx`
+   - `cpp_pdf2docx/build/final_image_text.docx`（已刷新）
+4. `m:oMathPara` 误判数量：`16 -> 4 -> 1`（v5 -> v8 -> v9）
+
+---
+
+## Module 20 记录：Linux 环境下建立 MSVC 验证链路（cpp_pdftools）
+
+- 详情文档：`prompts/module-20-msvc-validation-ci-v1.md`
+- 目标：让 `cpp_pdftools` 在 Linux 开发环境下可持续验证 Windows/MSVC 编译与测试。
+
+本轮关键改动：
+1. `cpp_pdftools/CMakePresets.json` 新增 `windows-msvc-debug/release` 的 configure/build/test presets。
+2. 新增 `.github/workflows/pdftools-ci.yml`：
+   - `ubuntu-latest / linux-debug`
+   - `windows-latest / windows-msvc-debug`
+   - checkout 启用 `submodules: recursive`
+   - 支持 `workflow_dispatch`
+3. `cpp_pdftools/src/pdf/extract_ops.cpp`：
+   - `_WIN32` 下禁用 `pdftotext + popen` POSIX fallback，返回 `kUnsupportedFeature`，避免 MSVC 平台编译/运行问题。
+
+本地验证：
+1. `cmake --list-presets=all` 可见新增 Windows preset。
+2. `cpp_pdftools` Linux 回归：`8/8 passed`。

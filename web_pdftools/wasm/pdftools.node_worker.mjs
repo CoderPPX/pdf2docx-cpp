@@ -14,8 +14,8 @@ const backendFactory = workerData?.backend === 'mock'
 const dispatcher = createWorkerDispatcher({ backendFactory });
 
 parentPort.on('message', (message) => {
-  void dispatcher.handleMessage(message, (response) => {
-    parentPort.postMessage(response);
+  void dispatcher.handleMessage(message, (response, transferables = []) => {
+    parentPort.postMessage(response, transferables);
   });
 });
 

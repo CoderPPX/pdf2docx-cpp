@@ -386,6 +386,46 @@ ipcMain.handle('fs:readFile', async (_event, filePath) => {
   return fs.promises.readFile(normalized);
 });
 
+function normalizeWriteBuffer(data) {
+  if (Buffer.isBuffer(data)) {
+    return data;
+  }
+  if (data instanceof Uint8Array) {
+    return Buffer.from(data);
+  }
+  if (data instanceof ArrayBuffer) {
+    return Buffer.from(new Uint8Array(data));
+  }
+  if (Array.isArray(data)) {
+    return Buffer.from(data);
+  }
+  if (data && typeof data === 'object' && data.type === 'Buffer' && Array.isArray(data.data)) {
+    return Buffer.from(data.data);
+  }
+  throw new Error('invalid file data');
+}
+
+ipcMain.handle('fs:writeFile', async (_event, payload) => {
+  const filePath = payload?.filePath;
+  if (!filePath || typeof filePath !== 'string') {
+    throw new Error('invalid file path');
+  }
+  if (!('data' in (payload || {}))) {
+    throw new Error('missing file data');
+  }
+
+  const normalized = path.resolve(filePath);
+  const buffer = normalizeWriteBuffer(payload.data);
+
+  await fs.promises.mkdir(path.dirname(normalized), { recursive: true });
+  await fs.promises.writeFile(normalized, buffer);
+  return {
+    ok: true,
+    filePath: normalized,
+    bytes: buffer.length
+  };
+});
+
 app.whenReady().then(() => {
   createWindow();
 

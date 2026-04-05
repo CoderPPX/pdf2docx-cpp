@@ -193,6 +193,12 @@ Status TryExtractTextWithPdfToTextFallback(const ExtractTextRequest& request, Ex
     return Status::Error(ErrorCode::kInvalidArgument, "result pointer is null");
   }
 
+#if defined(_WIN32)
+  (void)request;
+  return Status::Error(
+      ErrorCode::kUnsupportedFeature,
+      "pdftotext fallback is only supported on POSIX platforms");
+#else
   std::string command = "pdftotext " + QuoteShellArgPosix(request.input_pdf) + " - 2>/dev/null";
   FILE* pipe = popen(command.c_str(), "r");
   if (pipe == nullptr) {
@@ -249,6 +255,7 @@ Status TryExtractTextWithPdfToTextFallback(const ExtractTextRequest& request, Ex
   }
 
   return WriteOutputFile(request.output_path, result->text);
+#endif
 }
 
 Status TryLoadDocument(PoDoFo::PdfMemDocument* document, const std::string& input_pdf, std::string* error_message) {

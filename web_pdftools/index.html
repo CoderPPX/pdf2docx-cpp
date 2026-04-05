@@ -15,6 +15,57 @@
               <h3>运行状态</h3>
               <div id="binary-status" class="status pending">检测中...</div>
             </div>
+            <div class="card bridge-stats-card">
+              <div class="bridge-stats-head">
+                <h3>WASM Bridge 统计</h3>
+                <div class="bridge-stats-head-actions">
+                  <div id="bridge-stat-status" class="status pending">尚无任务</div>
+                  <button id="bridge-stats-reset" type="button">清空统计</button>
+                </div>
+              </div>
+              <div class="bridge-stats-grid">
+                <div class="bridge-stat-item">
+                  <span>任务</span>
+                  <strong id="bridge-stat-task">--</strong>
+                </div>
+                <div class="bridge-stat-item">
+                  <span>阶段</span>
+                  <strong id="bridge-stat-stage">--</strong>
+                </div>
+                <div class="bridge-stat-item">
+                  <span>耗时</span>
+                  <strong id="bridge-stat-time">--</strong>
+                </div>
+                <div class="bridge-stat-item">
+                  <span>文件 in/out</span>
+                  <strong id="bridge-stat-files">--</strong>
+                </div>
+                <div class="bridge-stat-item">
+                  <span>字节 in/out</span>
+                  <strong id="bridge-stat-bytes">--</strong>
+                </div>
+                <div class="bridge-stat-item">
+                  <span>更新时间</span>
+                  <strong id="bridge-stat-updated">--</strong>
+                </div>
+                <div class="bridge-stat-item">
+                  <span>近5次均值</span>
+                  <strong id="bridge-stat-avg">--</strong>
+                </div>
+                <div class="bridge-stat-item">
+                  <span>近5次成功率</span>
+                  <strong id="bridge-stat-success">--</strong>
+                </div>
+                <div class="bridge-stat-item">
+                  <span>最近回退</span>
+                  <strong id="bridge-stat-fallback">--</strong>
+                </div>
+                <div class="bridge-stat-item">
+                  <span>回退时间</span>
+                  <strong id="bridge-stat-fallback-time">--</strong>
+                </div>
+              </div>
+            </div>
           </section>
 
           <section class="tool-group">
@@ -220,7 +271,7 @@
     <div id="settings-modal" class="settings-modal" aria-hidden="true">
       <div class="settings-panel card" role="dialog" aria-modal="true" aria-labelledby="settings-title">
         <div class="settings-head">
-          <h2 id="settings-title">Theme Settings</h2>
+          <h2 id="settings-title">Theme & Backend Settings</h2>
           <button id="settings-close" type="button" class="settings-close-btn" aria-label="Close settings">
             ×
           </button>
@@ -233,6 +284,23 @@
             <option value="light">Light</option>
             <option value="system">System</option>
           </select>
+        </div>
+
+        <div class="field">
+          <label for="settings-backend-mode">Task Backend</label>
+          <select id="settings-backend-mode">
+            <option value="native-cli">Native CLI Tools</option>
+            <option value="wasm">WASM Worker (Preview)</option>
+          </select>
+          <p class="settings-note">WASM backend 为预览模式，功能正在逐步接入。</p>
+        </div>
+
+        <div class="field">
+          <label class="settings-check">
+            <input id="settings-wasm-fallback" type="checkbox" />
+            WASM 失败时自动回退 Native CLI
+          </label>
+          <p class="settings-note">建议开启：在 WASM preview 不稳定时可自动转本地工具执行。</p>
         </div>
 
         <div class="row settings-actions">

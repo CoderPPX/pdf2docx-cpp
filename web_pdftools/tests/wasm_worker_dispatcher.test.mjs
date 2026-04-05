@@ -13,6 +13,15 @@ async function dispatch(dispatcher, request) {
   return messages[0];
 }
 
+async function dispatchWithTransfer(dispatcher, request) {
+  const messages = [];
+  await dispatcher.handleMessage(request, (response, transferables = []) => {
+    messages.push({ response, transferables });
+  });
+  assert.equal(messages.length, 1);
+  return messages[0];
+}
+
 test('worker dispatcher: run before init returns NOT_INITIALIZED', async () => {
   const dispatcher = createWorkerDispatcher({ backendFactory: createMockPdftoolsBackend });
 
@@ -107,4 +116,43 @@ test('worker dispatcher: invalid request shape returns BAD_REQUEST', async () =>
 
   assert.equal(response.ok, false);
   assert.equal(response.error.code, 'BAD_REQUEST');
+});
+
+test('worker dispatcher: run response forwards transferable buffers', async () => {
+  const backendFactory = async () => ({
+    name: 'bridge-test',
+    async init() {
+      return { backend: 'bridge-test' };
+    },
+    async run() {
+      return {
+        bridge: true,
+        outputFiles: [
+          {
+            path: '/work/out/0.pdf',
+            data: Uint8Array.from([1, 2, 3, 4])
+          }
+        ]
+      };
+    }
+  });
+
+  const dispatcher = createWorkerDispatcher({ backendFactory });
+  await dispatch(dispatcher, {
+    id: 'transfer-init',
+    command: 'init',
+    payload: {}
+  });
+
+  const { response, transferables } = await dispatchWithTransfer(dispatcher, {
+    id: 'transfer-run',
+    command: 'run',
+    payload: { type: 'test-transfer' }
+  });
+
+  assert.equal(response.ok, true);
+  assert.equal(response.payload.bridge, true);
+  assert.equal(response.payload.outputFiles.length, 1);
+  assert.equal(transferables.length, 1);
+  assert.ok(transferables[0] instanceof ArrayBuffer);
 });
