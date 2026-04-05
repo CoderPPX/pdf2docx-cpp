@@ -9,21 +9,21 @@
 namespace qt_pdftools::ui {
 
 SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
-  setWindowTitle(QStringLiteral("Settings"));
+  setWindowTitle(QStringLiteral("设置"));
   resize(520, 260);
 
   auto* root = new QVBoxLayout(this);
   auto* form = new QFormLayout();
 
   theme_mode_combo_ = new QComboBox(this);
-  theme_mode_combo_->addItem(QStringLiteral("System"), QStringLiteral("system"));
-  theme_mode_combo_->addItem(QStringLiteral("Dark"), QStringLiteral("dark"));
-  theme_mode_combo_->addItem(QStringLiteral("Light"), QStringLiteral("light"));
+  theme_mode_combo_->addItem(QStringLiteral("跟随系统"), QStringLiteral("system"));
+  theme_mode_combo_->addItem(QStringLiteral("深色"), QStringLiteral("dark"));
+  theme_mode_combo_->addItem(QStringLiteral("浅色"), QStringLiteral("light"));
 
-  form->addRow(QStringLiteral("Theme"), theme_mode_combo_);
+  form->addRow(QStringLiteral("主题"), theme_mode_combo_);
 
   auto* hint = new QLabel(
-      QStringLiteral("说明：当前版本仅启用 native-lib（in-process）后端。"),
+      QStringLiteral("说明：当前版本仅启用 native-lib（进程内）后端。"),
       this);
   hint->setWordWrap(true);
 

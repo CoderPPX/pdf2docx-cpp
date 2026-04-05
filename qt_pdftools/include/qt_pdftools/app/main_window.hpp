@@ -5,6 +5,7 @@
 #include <QHash>
 #include <QMainWindow>
 #include <QPointer>
+#include <QVector>
 
 #include "qt_pdftools/backend/backend_registry.hpp"
 #include "qt_pdftools/core/app_settings.hpp"
@@ -116,9 +117,53 @@ class MainWindow final : public QMainWindow {
   bool SaveBookmarksForWidget(QWidget* widget, const QString& pdf_path);
   bool LoadInkForWidget(QWidget* widget, const QString& pdf_path);
   bool SaveInkForWidget(QWidget* widget, const QString& pdf_path);
+  struct DocumentSession;
+  int ReadPdfPageCount(const QString& pdf_path, QString* error_message = nullptr) const;
+  bool MaterializeSessionForTab(qt_pdftools::ui::PdfTabView* tab,
+                                const QString& target_pdf,
+                                QString* error_message = nullptr);
+  bool BuildSessionOutputPdf(const DocumentSession& session,
+                             const QString& output_pdf,
+                             QString* error_message = nullptr);
+  bool RenderSessionPreviewForTab(qt_pdftools::ui::PdfTabView* tab, QString* error_message = nullptr);
 
   QStringList ParseMultilinePaths(const QString& raw_text) const;
   QString SuggestOutput(const QString& input_path, const QString& suffix, const QString& extension) const;
+
+ private:
+  struct SessionPageRef {
+    QString source_pdf;
+    int source_page = 1;
+  };
+
+  enum class SessionOpType {
+    kMergeAppend,
+    kMergePrepend,
+    kDeletePage,
+    kSwapPages,
+  };
+
+  struct SessionOp {
+    SessionOpType type = SessionOpType::kDeletePage;
+    QString source_pdf;
+    int page = 0;
+    int page_b = 0;
+  };
+
+  struct DocumentSession {
+    QString base_pdf_path;
+    QString save_path;
+    bool dirty = false;
+    QVector<SessionPageRef> logical_pages;
+    QVector<SessionOp> applied_ops;
+    QVector<SessionOp> redo_ops;
+  };
+
+  DocumentSession* EnsureSessionForTab(QWidget* widget);
+  const DocumentSession* SessionForTab(QWidget* widget) const;
+  bool RebuildSessionLogicalPages(DocumentSession* session, QString* error_message = nullptr) const;
+  bool ApplyEditOpToCurrentTab(const SessionOp& op);
+  QString DescribeSessionOp(const SessionOp& op) const;
 
  private:
   std::unique_ptr<QSettings> settings_;
@@ -216,6 +261,8 @@ class MainWindow final : public QMainWindow {
   QHash<QWidget*, QStringList> undo_stack_by_tab_;
   QHash<QWidget*, QStringList> redo_stack_by_tab_;
   QHash<QWidget*, QVariantList> bookmarks_by_tab_;
+  QHash<QWidget*, DocumentSession> sessions_by_tab_;
+  mutable QHash<QString, int> pdf_page_count_cache_;
   int next_task_id_ = 1;
   int active_task_id_ = 0;
 };
