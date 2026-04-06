@@ -16,13 +16,16 @@ class QComboBox;
 class QAction;
 class QLabel;
 class QLineEdit;
+class QListView;
 class QListWidget;
 class QPushButton;
 class QRadioButton;
 class QSettings;
 class QSpinBox;
+class QStandardItemModel;
 class QTabWidget;
 class QTextEdit;
+class QFileSystemModel;
 template <typename T>
 class QFutureWatcher;
 class QCloseEvent;
@@ -52,6 +55,7 @@ class MainWindow final : public QMainWindow {
   QWidget* BuildInsertPage();
   QWidget* BuildReplacePage();
   QWidget* BuildDocxPage();
+  QWidget* BuildImageToPdfPage();
   QWidget* BuildEditCurrentPage();
   QWidget* BuildExtractImagesPage();
   QWidget* BuildAnnotationBookmarkPage();
@@ -63,9 +67,12 @@ class MainWindow final : public QMainWindow {
   void BindInsertSignals();
   void BindReplaceSignals();
   void BindDocxSignals();
+  void BindImageToPdfSignals();
   void BindEditCurrentSignals();
   void BindExtractImagesSignals();
   void BindAnnotationBookmarkSignals();
+  void InitPathCompleterModels();
+  void AttachPathCompleter(QLineEdit* edit, bool directory_only = false);
 
   void AppendLog(const QString& message);
   void ApplyTheme(const QString& theme_mode);
@@ -79,6 +86,7 @@ class MainWindow final : public QMainWindow {
                   bool focus = true,
                   const QString& custom_title = QString(),
                   bool is_preview_temp = false);
+  void OpenImagePreviewTab(const QString& path, bool focus = true);
   bool SaveTabByIndex(int index, bool force_save_as = false);
   bool ConfirmCloseTab(int index);
   bool RequestCloseTab(int index);
@@ -226,6 +234,16 @@ class MainWindow final : public QMainWindow {
   QCheckBox* docx_anchored_check_ = nullptr;
   QPushButton* docx_run_button_ = nullptr;
 
+  QListView* image2pdf_list_view_ = nullptr;
+  QStandardItemModel* image2pdf_model_ = nullptr;
+  QPushButton* image2pdf_import_button_ = nullptr;
+  QPushButton* image2pdf_remove_button_ = nullptr;
+  QPushButton* image2pdf_move_up_button_ = nullptr;
+  QPushButton* image2pdf_move_down_button_ = nullptr;
+  QLineEdit* image2pdf_output_edit_ = nullptr;
+  QPushButton* image2pdf_preview_button_ = nullptr;
+  QPushButton* image2pdf_run_button_ = nullptr;
+
   QLineEdit* edit_current_merge_source_edit_ = nullptr;
   QRadioButton* edit_current_merge_append_radio_ = nullptr;
   QRadioButton* edit_current_merge_prepend_radio_ = nullptr;
@@ -258,6 +276,8 @@ class MainWindow final : public QMainWindow {
   QPointer<QFutureWatcher<qt_pdftools::core::TaskResult>> task_watcher_;
   QPointer<QAction> undo_action_;
   QPointer<QAction> redo_action_;
+  QFileSystemModel* file_path_model_ = nullptr;
+  QFileSystemModel* dir_path_model_ = nullptr;
   QHash<QWidget*, QStringList> undo_stack_by_tab_;
   QHash<QWidget*, QStringList> redo_stack_by_tab_;
   QHash<QWidget*, QVariantList> bookmarks_by_tab_;

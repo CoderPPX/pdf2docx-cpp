@@ -13,6 +13,7 @@ enum class TaskType {
   kReplacePage,
   kSwapPages,
   kExtractImages,
+  kImagesToPdf,
   kPdfToDocx
 };
 
@@ -34,6 +35,7 @@ struct TaskRequest {
   QString dump_ir_path;
   bool no_images = false;
   bool anchored_images = false;
+  QStringList input_images;
 };
 
 struct ErrorEnvelope {
@@ -82,6 +84,8 @@ inline QString TaskTypeToString(TaskType type) {
       return QStringLiteral("swap-pages");
     case TaskType::kExtractImages:
       return QStringLiteral("extract-images");
+    case TaskType::kImagesToPdf:
+      return QStringLiteral("image2pdf");
     case TaskType::kPdfToDocx:
       return QStringLiteral("pdf2docx");
   }
@@ -102,6 +106,8 @@ inline QString TaskTypeToDisplayName(TaskType type) {
       return QStringLiteral("交换页");
     case TaskType::kExtractImages:
       return QStringLiteral("提取图片");
+    case TaskType::kImagesToPdf:
+      return QStringLiteral("图片转PDF");
     case TaskType::kPdfToDocx:
       return QStringLiteral("PDF -> DOCX");
   }

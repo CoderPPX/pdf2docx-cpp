@@ -9,6 +9,7 @@
 
 #include "pdftools/convert/pdf2docx.hpp"
 #include "pdftools/error_handling.hpp"
+#include "pdftools/pdf/create_ops.hpp"
 #include "pdftools/pdf/document_ops.hpp"
 #include "pdftools/pdf/extract_ops.hpp"
 
@@ -292,6 +293,38 @@ core::TaskResult NativeLibBackend::RunTask(const core::TaskRequest& request) {
                             .arg(native_res.page_count)
                             .arg(native_res.image_count),
                         request.output_docx,
+                        args,
+                        details);
+  }
+
+  if (request.type == core::TaskType::kImagesToPdf) {
+    pdftools::pdf::ImagesToPdfRequest native_req;
+    native_req.output_pdf = request.output_pdf.toStdString();
+    native_req.overwrite = true;
+    for (const QString& item : request.input_images) {
+      native_req.image_paths.push_back(item.toStdString());
+    }
+
+    pdftools::pdf::ImagesToPdfResult native_res;
+    const pdftools::Status status = pdftools::pdf::ImagesToPdf(native_req, &native_res);
+
+    QStringList args = QStringList() << QStringLiteral("image2pdf")
+                                     << QStringLiteral("--output") << request.output_pdf
+                                     << QStringLiteral("--images");
+    args << request.input_images;
+    if (!status.ok()) {
+      return BuildFailure(backend_id, backend_label, status, args);
+    }
+
+    QVariantMap details;
+    details.insert(QStringLiteral("pageCount"), static_cast<int>(native_res.page_count));
+    details.insert(QStringLiteral("skippedImages"), static_cast<int>(native_res.skipped_image_count));
+    return BuildSuccess(backend_id,
+                        backend_label,
+                        QStringLiteral("图片转PDF成功，页数=%1，跳过=%2")
+                            .arg(native_res.page_count)
+                            .arg(native_res.skipped_image_count),
+                        request.output_pdf,
                         args,
                         details);
   }

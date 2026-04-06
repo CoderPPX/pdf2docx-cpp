@@ -8,11 +8,13 @@
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QComboBox>
+#include <QCompleter>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFileSystemModel>
 #include <QFormLayout>
 #include <QFutureWatcher>
 #include <QGroupBox>
@@ -24,12 +26,15 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListView>
 #include <QListWidget>
 #include <QMainWindow>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QModelIndexList>
 #include <QPalette>
+#include <QPixmap>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QRegularExpression>
@@ -39,6 +44,8 @@
 #include <QSettings>
 #include <QSizePolicy>
 #include <QSpinBox>
+#include <QStandardItem>
+#include <QStandardItemModel>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QStyle>
@@ -143,6 +150,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     }
   }
 
+  InitPathCompleterModels();
   BuildUi();
   BindSignals();
   ApplyTheme(app_settings_.theme_mode);
@@ -291,6 +299,34 @@ void MainWindow::BuildMenu() {
   });
 }
 
+void MainWindow::InitPathCompleterModels() {
+  if (file_path_model_ == nullptr) {
+    file_path_model_ = new QFileSystemModel(this);
+    file_path_model_->setRootPath(QDir::rootPath());
+    file_path_model_->setFilter(QDir::AllDirs | QDir::Files | QDir::NoDotAndDotDot);
+  }
+  if (dir_path_model_ == nullptr) {
+    dir_path_model_ = new QFileSystemModel(this);
+    dir_path_model_->setRootPath(QDir::rootPath());
+    dir_path_model_->setFilter(QDir::AllDirs | QDir::NoDotAndDotDot);
+  }
+}
+
+void MainWindow::AttachPathCompleter(QLineEdit* edit, bool directory_only) {
+  if (edit == nullptr) {
+    return;
+  }
+  QFileSystemModel* model = directory_only ? dir_path_model_ : file_path_model_;
+  if (model == nullptr) {
+    return;
+  }
+  auto* completer = new QCompleter(model, edit);
+  completer->setCompletionMode(QCompleter::PopupCompletion);
+  completer->setCaseSensitivity(Qt::CaseInsensitive);
+  completer->setFilterMode(Qt::MatchStartsWith);
+  edit->setCompleter(completer);
+}
+
 QWidget* MainWindow::BuildSidebar() {
   auto* sidebar = new QWidget(this);
   auto* root = new QVBoxLayout(sidebar);
@@ -336,6 +372,7 @@ QWidget* MainWindow::BuildSidebar() {
 
   add_section(QStringLiteral("编辑当前PDF"), BuildEditCurrentPage(), true);
   add_section(QStringLiteral("提取图片"), BuildExtractImagesPage(), false);
+  add_section(QStringLiteral("图片转PDF"), BuildImageToPdfPage(), false);
   add_section(QStringLiteral("PDF合并"), BuildMergePage(), false);
   add_section(QStringLiteral("删除页"), BuildDeletePage(), false);
   add_section(QStringLiteral("插入页"), BuildInsertPage(), false);
@@ -389,6 +426,7 @@ QWidget* MainWindow::BuildMergePage() {
 
   auto* output_row = new QHBoxLayout();
   merge_output_edit_ = new QLineEdit(page);
+  AttachPathCompleter(merge_output_edit_);
   auto* output_browse = CreateFileDialogButton(page, QStringLiteral("选择输出 PDF"));
   output_row->addWidget(output_browse);
   output_row->addWidget(merge_output_edit_, 1);
@@ -427,6 +465,8 @@ QWidget* MainWindow::BuildDeletePage() {
   delete_input_tab_combo_ = new QComboBox(page);
   delete_input_edit_ = new QLineEdit(page);
   delete_output_edit_ = new QLineEdit(page);
+  AttachPathCompleter(delete_input_edit_);
+  AttachPathCompleter(delete_output_edit_);
   delete_page_spin_ = new QSpinBox(page);
   delete_page_spin_->setRange(1, 999999);
   delete_page_spin_->setValue(1);
@@ -491,6 +531,9 @@ QWidget* MainWindow::BuildInsertPage() {
   insert_source_tab_combo_ = new QComboBox(page);
   insert_source_edit_ = new QLineEdit(page);
   insert_output_edit_ = new QLineEdit(page);
+  AttachPathCompleter(insert_target_edit_);
+  AttachPathCompleter(insert_source_edit_);
+  AttachPathCompleter(insert_output_edit_);
 
   insert_at_spin_ = new QSpinBox(page);
   insert_at_spin_->setRange(1, 999999);
@@ -579,6 +622,9 @@ QWidget* MainWindow::BuildReplacePage() {
   replace_source_tab_combo_ = new QComboBox(page);
   replace_source_edit_ = new QLineEdit(page);
   replace_output_edit_ = new QLineEdit(page);
+  AttachPathCompleter(replace_target_edit_);
+  AttachPathCompleter(replace_source_edit_);
+  AttachPathCompleter(replace_output_edit_);
 
   replace_page_spin_ = new QSpinBox(page);
   replace_page_spin_->setRange(1, 999999);
@@ -666,6 +712,9 @@ QWidget* MainWindow::BuildDocxPage() {
   docx_input_edit_ = new QLineEdit(page);
   docx_output_edit_ = new QLineEdit(page);
   docx_dump_ir_edit_ = new QLineEdit(page);
+  AttachPathCompleter(docx_input_edit_);
+  AttachPathCompleter(docx_output_edit_);
+  AttachPathCompleter(docx_dump_ir_edit_);
   docx_no_images_check_ = new QCheckBox(QStringLiteral("不导出图片"), page);
   docx_anchored_check_ = new QCheckBox(QStringLiteral("锚定图片"), page);
   docx_run_button_ = new QPushButton(QStringLiteral("执行"), page);
@@ -741,6 +790,63 @@ QWidget* MainWindow::BuildDocxPage() {
   return page;
 }
 
+QWidget* MainWindow::BuildImageToPdfPage() {
+  auto* page = new QWidget(this);
+  auto* layout = new QVBoxLayout(page);
+  layout->setContentsMargins(8, 4, 8, 8);
+  layout->setSpacing(8);
+
+  image2pdf_list_view_ = new QListView(page);
+  image2pdf_list_view_->setSelectionMode(QAbstractItemView::SingleSelection);
+  image2pdf_list_view_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+  image2pdf_list_view_->setMinimumHeight(160);
+  image2pdf_model_ = new QStandardItemModel(image2pdf_list_view_);
+  image2pdf_list_view_->setModel(image2pdf_model_);
+  layout->addWidget(image2pdf_list_view_, 1);
+
+  auto* list_buttons_row = new QHBoxLayout();
+  image2pdf_import_button_ = new QPushButton(QStringLiteral("导入图片"), page);
+  image2pdf_remove_button_ = new QPushButton(QStringLiteral("删除图片"), page);
+  image2pdf_move_up_button_ = new QPushButton(QStringLiteral("向上移动"), page);
+  image2pdf_move_down_button_ = new QPushButton(QStringLiteral("向下移动"), page);
+  list_buttons_row->addWidget(image2pdf_import_button_);
+  list_buttons_row->addWidget(image2pdf_remove_button_);
+  list_buttons_row->addWidget(image2pdf_move_up_button_);
+  list_buttons_row->addWidget(image2pdf_move_down_button_);
+  layout->addLayout(list_buttons_row);
+
+  auto* output_row = new QHBoxLayout();
+  auto* output_label = new QLabel(QStringLiteral("输出PDF位置"), page);
+  image2pdf_output_edit_ = new QLineEdit(page);
+  AttachPathCompleter(image2pdf_output_edit_);
+  auto* output_pick_button = CreateFileDialogButton(page, QStringLiteral("选择输出 PDF"));
+  output_row->addWidget(output_label);
+  output_row->addWidget(output_pick_button);
+  output_row->addWidget(image2pdf_output_edit_, 1);
+  layout->addLayout(output_row);
+
+  auto* action_row = new QHBoxLayout();
+  image2pdf_preview_button_ = new QPushButton(QStringLiteral("预览"), page);
+  image2pdf_run_button_ = new QPushButton(QStringLiteral("转换"), page);
+  action_row->addWidget(image2pdf_preview_button_);
+  action_row->addStretch(1);
+  action_row->addWidget(image2pdf_run_button_);
+  layout->addLayout(action_row);
+
+  connect(output_pick_button, &QPushButton::clicked, this, [this]() {
+    const QString target = QFileDialog::getSaveFileName(this,
+                                                        QStringLiteral("保存输出 PDF"),
+                                                        DialogInitialPath(image2pdf_output_edit_->text()),
+                                                        QStringLiteral("PDF 文件 (*.pdf)"));
+    if (!target.isEmpty()) {
+      image2pdf_output_edit_->setText(target);
+      RememberDialogPath(target);
+    }
+  });
+
+  return page;
+}
+
 QWidget* MainWindow::BuildEditCurrentPage() {
   auto* page = new QWidget(this);
   auto* layout = new QVBoxLayout(page);
@@ -751,6 +857,7 @@ QWidget* MainWindow::BuildEditCurrentPage() {
   auto* merge_layout = new QVBoxLayout(merge_group);
   auto* merge_source_row = new QHBoxLayout();
   edit_current_merge_source_edit_ = new QLineEdit(merge_group);
+  AttachPathCompleter(edit_current_merge_source_edit_);
   edit_current_merge_source_edit_->setPlaceholderText(QStringLiteral("选择要合并的外部PDF"));
   auto* merge_pick_button = CreateFileDialogButton(merge_group, QStringLiteral("选择待合并 PDF"));
   merge_source_row->addWidget(merge_pick_button);
@@ -821,6 +928,7 @@ QWidget* MainWindow::BuildExtractImagesPage() {
   edit_current_extract_from_spin_->setValue(1);
   edit_current_extract_to_spin_->setValue(1);
   edit_current_extract_output_dir_edit_ = new QLineEdit(page);
+  AttachPathCompleter(edit_current_extract_output_dir_edit_, true);
   auto* extract_pick_dir = CreateFileDialogButton(page, QStringLiteral("选择输出目录"));
   auto* output_row = new QHBoxLayout();
   output_row->addWidget(extract_pick_dir);
@@ -1016,6 +1124,7 @@ void MainWindow::BindSignals() {
   BindInsertSignals();
   BindReplaceSignals();
   BindDocxSignals();
+  BindImageToPdfSignals();
   BindEditCurrentSignals();
   BindExtractImagesSignals();
   BindAnnotationBookmarkSignals();
@@ -1226,6 +1335,176 @@ void MainWindow::BindDocxSignals() {
     request.no_images = docx_no_images_check_->isChecked();
     request.anchored_images = docx_anchored_check_->isChecked();
     RunTask(request);
+  });
+}
+
+void MainWindow::BindImageToPdfSignals() {
+  if (image2pdf_list_view_ == nullptr || image2pdf_model_ == nullptr ||
+      image2pdf_import_button_ == nullptr || image2pdf_remove_button_ == nullptr ||
+      image2pdf_move_up_button_ == nullptr || image2pdf_move_down_button_ == nullptr ||
+      image2pdf_output_edit_ == nullptr || image2pdf_preview_button_ == nullptr ||
+      image2pdf_run_button_ == nullptr) {
+    return;
+  }
+
+  const auto collect_image_paths = [this]() {
+    QStringList paths;
+    if (image2pdf_model_ == nullptr) {
+      return paths;
+    }
+    for (int row = 0; row < image2pdf_model_->rowCount(); ++row) {
+      QStandardItem* item = image2pdf_model_->item(row, 0);
+      if (item == nullptr) {
+        continue;
+      }
+      const QString path = item->data(Qt::UserRole).toString().trimmed();
+      if (!path.isEmpty()) {
+        paths << path;
+      }
+    }
+    return paths;
+  };
+
+  connect(image2pdf_import_button_, &QPushButton::clicked, this, [this]() {
+    const QStringList files = QFileDialog::getOpenFileNames(
+        this,
+        QStringLiteral("选择图片文件"),
+        DialogInitialPath(),
+        QStringLiteral("图片文件 (*.png *.jpg *.jpeg *.bmp *.gif *.tif *.tiff *.webp)"));
+    if (files.isEmpty()) {
+      return;
+    }
+
+    int added = 0;
+    for (const QString& file : files) {
+      const QString path = QFileInfo(file).absoluteFilePath();
+      if (path.isEmpty()) {
+        continue;
+      }
+      bool exists = false;
+      for (int row = 0; row < image2pdf_model_->rowCount(); ++row) {
+        QStandardItem* existing_item = image2pdf_model_->item(row, 0);
+        if (existing_item != nullptr && existing_item->data(Qt::UserRole).toString() == path) {
+          exists = true;
+          break;
+        }
+      }
+      if (exists) {
+        continue;
+      }
+      auto* item = new QStandardItem(Basename(path));
+      item->setData(path, Qt::UserRole);
+      item->setToolTip(path);
+      image2pdf_model_->appendRow(item);
+      ++added;
+    }
+
+    RememberDialogPath(files.first());
+    if (added > 0 && image2pdf_output_edit_->text().trimmed().isEmpty()) {
+      image2pdf_output_edit_->setText(
+          SuggestOutput(files.first(), QStringLiteral("_images"), QStringLiteral(".pdf")));
+    }
+    AppendLog(QStringLiteral("已导入 %1 张图片。").arg(added));
+  });
+
+  connect(image2pdf_remove_button_, &QPushButton::clicked, this, [this]() {
+    if (image2pdf_model_ == nullptr || image2pdf_list_view_ == nullptr ||
+        image2pdf_list_view_->selectionModel() == nullptr) {
+      return;
+    }
+    QModelIndexList selected = image2pdf_list_view_->selectionModel()->selectedRows();
+    if (selected.isEmpty()) {
+      return;
+    }
+    std::sort(selected.begin(), selected.end(), [](const QModelIndex& a, const QModelIndex& b) {
+      return a.row() > b.row();
+    });
+    for (const QModelIndex& index : selected) {
+      image2pdf_model_->removeRow(index.row());
+    }
+    AppendLog(QStringLiteral("已删除 %1 张图片。").arg(selected.size()));
+  });
+
+  connect(image2pdf_move_up_button_, &QPushButton::clicked, this, [this]() {
+    if (image2pdf_model_ == nullptr || image2pdf_list_view_ == nullptr) {
+      return;
+    }
+    const QModelIndex index = image2pdf_list_view_->currentIndex();
+    if (!index.isValid() || index.row() <= 0) {
+      return;
+    }
+    const int row = index.row();
+    QList<QStandardItem*> moved = image2pdf_model_->takeRow(row);
+    if (moved.isEmpty()) {
+      return;
+    }
+    image2pdf_model_->insertRow(row - 1, moved);
+    image2pdf_list_view_->setCurrentIndex(image2pdf_model_->index(row - 1, 0));
+  });
+
+  connect(image2pdf_move_down_button_, &QPushButton::clicked, this, [this]() {
+    if (image2pdf_model_ == nullptr || image2pdf_list_view_ == nullptr) {
+      return;
+    }
+    const QModelIndex index = image2pdf_list_view_->currentIndex();
+    if (!index.isValid() || index.row() >= image2pdf_model_->rowCount() - 1) {
+      return;
+    }
+    const int row = index.row();
+    QList<QStandardItem*> moved = image2pdf_model_->takeRow(row);
+    if (moved.isEmpty()) {
+      return;
+    }
+    image2pdf_model_->insertRow(row + 1, moved);
+    image2pdf_list_view_->setCurrentIndex(image2pdf_model_->index(row + 1, 0));
+  });
+
+  connect(image2pdf_list_view_, &QListView::doubleClicked, this, [this](const QModelIndex& index) {
+    if (!index.isValid() || image2pdf_model_ == nullptr) {
+      return;
+    }
+    QStandardItem* item = image2pdf_model_->itemFromIndex(index);
+    if (item == nullptr) {
+      return;
+    }
+    const QString path = item->data(Qt::UserRole).toString().trimmed();
+    if (!path.isEmpty()) {
+      OpenImagePreviewTab(path, true);
+    }
+  });
+
+  connect(image2pdf_preview_button_, &QPushButton::clicked, this, [this, collect_image_paths]() {
+    const QStringList images = collect_image_paths();
+    if (images.isEmpty()) {
+      AppendLog(QStringLiteral("图片转PDF预览需要至少 1 张图片。"));
+      return;
+    }
+
+    core::TaskRequest request;
+    request.type = core::TaskType::kImagesToPdf;
+    request.input_images = images;
+    request.output_pdf = BuildPreviewOutputPath(request.type);
+    RunTask(request, true);
+  });
+
+  connect(image2pdf_run_button_, &QPushButton::clicked, this, [this, collect_image_paths]() {
+    const QStringList images = collect_image_paths();
+    const QString output_pdf = image2pdf_output_edit_->text().trimmed();
+    if (images.isEmpty()) {
+      AppendLog(QStringLiteral("图片转PDF需要至少 1 张图片。"));
+      return;
+    }
+    if (output_pdf.isEmpty()) {
+      AppendLog(QStringLiteral("请先设置输出 PDF 路径。"));
+      return;
+    }
+    RememberDialogPath(output_pdf);
+
+    core::TaskRequest request;
+    request.type = core::TaskType::kImagesToPdf;
+    request.input_images = images;
+    request.output_pdf = output_pdf;
+    RunTask(request, false);
   });
 }
 
@@ -1695,6 +1974,62 @@ void MainWindow::OpenPdfTab(const QString& path,
 
   RefreshTabSelectors();
   RefreshBookmarkPanel();
+  UpdatePreviewFooter();
+}
+
+void MainWindow::OpenImagePreviewTab(const QString& path, bool focus) {
+  if (preview_tabs_ == nullptr) {
+    return;
+  }
+
+  const QString normalized = QFileInfo(path.trimmed()).absoluteFilePath();
+  if (normalized.isEmpty() || !QFileInfo::exists(normalized)) {
+    AppendLog(QStringLiteral("加载图片失败: 文件不存在 %1").arg(path));
+    return;
+  }
+
+  for (int i = 0; i < preview_tabs_->count(); ++i) {
+    QWidget* widget = preview_tabs_->widget(i);
+    if (widget == nullptr) {
+      continue;
+    }
+    if (widget->property("tab_kind").toString() == QStringLiteral("image") &&
+        widget->property("file_path").toString() == normalized) {
+      if (focus) {
+        preview_tabs_->setCurrentIndex(i);
+      }
+      return;
+    }
+  }
+
+  QPixmap pixmap(normalized);
+  if (pixmap.isNull()) {
+    AppendLog(QStringLiteral("加载图片失败: 不支持或损坏的图像 %1").arg(normalized));
+    return;
+  }
+
+  auto* container = new QWidget(preview_tabs_);
+  auto* layout = new QVBoxLayout(container);
+  layout->setContentsMargins(0, 0, 0, 0);
+  auto* scroll = new QScrollArea(container);
+  scroll->setWidgetResizable(true);
+  auto* image_label = new QLabel(scroll);
+  image_label->setAlignment(Qt::AlignCenter);
+  image_label->setPixmap(pixmap);
+  scroll->setWidget(image_label);
+  layout->addWidget(scroll, 1);
+
+  container->setProperty("tab_kind", QStringLiteral("image"));
+  container->setProperty("file_path", normalized);
+  container->setProperty("is_dirty", false);
+
+  const int index = preview_tabs_->addTab(container, QStringLiteral("[图] %1").arg(Basename(normalized)));
+  preview_tabs_->setTabToolTip(index, normalized);
+  EnsureTabCloseButton(index);
+  RefreshTabCloseButton(index);
+  if (focus) {
+    preview_tabs_->setCurrentIndex(index);
+  }
   UpdatePreviewFooter();
 }
 
@@ -2199,6 +2534,21 @@ void MainWindow::UpdatePreviewFooter() {
     return;
   }
 
+  auto set_nav_enabled = [this](bool enabled) {
+    if (preview_prev_button_ != nullptr) {
+      preview_prev_button_->setEnabled(enabled);
+    }
+    if (preview_next_button_ != nullptr) {
+      preview_next_button_->setEnabled(enabled);
+    }
+    if (preview_zoom_in_button_ != nullptr) {
+      preview_zoom_in_button_->setEnabled(enabled);
+    }
+    if (preview_zoom_out_button_ != nullptr) {
+      preview_zoom_out_button_->setEnabled(enabled);
+    }
+  };
+
   auto update_edit_ranges = [this](int max_page) {
     const int clamped_max = std::max(1, max_page);
     if (edit_current_delete_page_spin_ != nullptr) {
@@ -2218,16 +2568,29 @@ void MainWindow::UpdatePreviewFooter() {
     }
   };
 
+  QWidget* current_widget = preview_tabs_ != nullptr ? preview_tabs_->currentWidget() : nullptr;
   auto* tab = ActivePdfTab();
-  if (tab == nullptr) {
-    preview_current_label_->setText(QStringLiteral("文件位置: 未打开PDF文件"));
-    preview_page_label_->setText(QStringLiteral("0 / 0"));
-    preview_zoom_label_->setText(QStringLiteral("100%"));
+  if (tab == nullptr && current_widget != nullptr &&
+      current_widget->property("tab_kind").toString() == QStringLiteral("image")) {
+    const QString path = current_widget->property("file_path").toString();
+    preview_current_label_->setText(QStringLiteral("文件位置: %1").arg(path));
+    preview_page_label_->setText(QStringLiteral("图片预览"));
+    preview_zoom_label_->setText(QStringLiteral("-"));
+    set_nav_enabled(false);
     update_edit_ranges(1);
     return;
   }
 
-  QWidget* current_widget = preview_tabs_ != nullptr ? preview_tabs_->currentWidget() : nullptr;
+  if (tab == nullptr) {
+    preview_current_label_->setText(QStringLiteral("文件位置: 未打开PDF文件"));
+    preview_page_label_->setText(QStringLiteral("0 / 0"));
+    preview_zoom_label_->setText(QStringLiteral("100%"));
+    set_nav_enabled(false);
+    update_edit_ranges(1);
+    return;
+  }
+
+  set_nav_enabled(true);
   const DocumentSession* session = SessionForTab(current_widget);
   const int total_pages = (session != nullptr && !session->logical_pages.isEmpty())
                               ? session->logical_pages.size()
@@ -3121,6 +3484,8 @@ void MainWindow::StartTaskExecution(const qt_pdftools::core::TaskRequest& reques
         replace_run_button_,
         replace_preview_button_,
         docx_run_button_,
+        image2pdf_preview_button_,
+        image2pdf_run_button_,
         edit_current_merge_apply_button_,
         edit_current_delete_apply_button_,
         edit_current_swap_apply_button_,
@@ -3162,6 +3527,8 @@ void MainWindow::HandleTaskFinished(const qt_pdftools::core::TaskRequest& reques
         replace_run_button_,
         replace_preview_button_,
         docx_run_button_,
+        image2pdf_preview_button_,
+        image2pdf_run_button_,
         edit_current_merge_apply_button_,
         edit_current_delete_apply_button_,
         edit_current_swap_apply_button_,
@@ -3193,7 +3560,7 @@ void MainWindow::HandleTaskFinished(const qt_pdftools::core::TaskRequest& reques
     const bool output_is_pdf =
         request.type == core::TaskType::kMerge || request.type == core::TaskType::kDeletePage ||
         request.type == core::TaskType::kInsertPage || request.type == core::TaskType::kReplacePage ||
-        request.type == core::TaskType::kSwapPages;
+        request.type == core::TaskType::kSwapPages || request.type == core::TaskType::kImagesToPdf;
     if (!result.output_path.isEmpty() && output_is_pdf) {
       if (edit_current && preview_tabs_ != nullptr && target_tab_index >= 0 &&
           target_tab_index < preview_tabs_->count()) {
@@ -3309,6 +3676,8 @@ QString MainWindow::BuildTaskInputSummary(const qt_pdftools::core::TaskRequest& 
           .arg(request.output_dir)
           .arg(request.page)
           .arg(request.page_b);
+    case core::TaskType::kImagesToPdf:
+      return QStringLiteral("images=%1").arg(request.input_images.join(QStringLiteral(", ")));
     case core::TaskType::kPdfToDocx:
       return QStringLiteral("input=%1, output=%2, noImages=%3, anchored=%4")
           .arg(request.input_pdf)
@@ -3339,6 +3708,9 @@ QString MainWindow::BuildPreviewOutputPath(qt_pdftools::core::TaskType type) con
       break;
     case core::TaskType::kExtractImages:
       op_name = QStringLiteral("extract-images");
+      break;
+    case core::TaskType::kImagesToPdf:
+      op_name = QStringLiteral("image2pdf");
       break;
     case core::TaskType::kPdfToDocx:
       op_name = QStringLiteral("pdf2docx");
